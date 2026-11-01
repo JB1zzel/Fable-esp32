@@ -32,8 +32,6 @@ extern "C" {
 #define TUI_YELLOW    14
 #define TUI_WHITE     15
 
-
-
 /* Lifecycle */
 void tui_init(void);        /* enter full-screen mode */
 void tui_restore(void);     /* undo init; hand terminal back to the shell */
@@ -51,6 +49,13 @@ void tui_putc(int c);
 void tui_puts(const char *s);
 void tui_cursor(int visible, int block); /* block=1 solid, block=0 underline */
 void tui_boot_colors(int delay_ms);
+/* wifi */
+void set_boot_time(const char *s);
+void set_boot_wifi_ssid(const char *s);
+
+int tui_wifi_scan(char names[][33], int max);
+int tui_wifi_save(const char *ssid, const char *pass);
+int tui_wifi_load(char *ssid, int ssid_len, char *pass, int pass_len);
 /* Input */
 int  tui_getch(void);       /* blocking; returns key code, or -1 on EOF */
 int  tui_shift_down(void);  /* 1 if Shift is currently held */
@@ -58,7 +63,7 @@ int tui_key_pending(void);
 int tui_list_dir(const char *path, char names[][32], int max);
 /* Platform */
 void tui_exe_dir(char *out, int len);   /* folder containing the exe, trailing slash; "" on ESP32 */
-
+unsigned long tui_millis(void);
 #ifdef __cplusplus
 }
 #endif

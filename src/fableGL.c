@@ -43,9 +43,26 @@
 #define MAXLINES 256
 #define MAXLINE  1024
 #define SCRW     80
-#define SCRH 58  /* 59 text rows + 1 status row = 60 total */
+#define SCRH 55  /* 59 text rows + 1 status row = 60 total */
 //#define SCRH     28
 
+
+static char          boot_time_str[32] = "";
+static char          boot_wifi_ssid[33] = "";
+static unsigned long boot_time_millis = 0;     /* <-- new */
+
+void set_boot_time(const char *s)
+{
+    strncpy(boot_time_str, s, sizeof(boot_time_str) - 1);
+    boot_time_str[sizeof(boot_time_str) - 1] = '\0';
+    boot_time_millis = tui_millis();               /* <-- new to get actuall time*/
+}
+
+void set_boot_wifi_ssid(const char *s)
+{
+    strncpy(boot_wifi_ssid, s, sizeof(boot_wifi_ssid) - 1);
+    boot_wifi_ssid[sizeof(boot_wifi_ssid) - 1] = '\0';
+}
 
 #define IS_WORD(c) (isalnum((unsigned char)(c)) || (c) == '_')
 static char (*lines)[MAXLINE] = NULL;
@@ -1078,6 +1095,32 @@ static int prompt_line(const char *prompt, char *dest, int maxlen)
     return 0;
 }
 
+static int prompt_line_edit(char *dest, int initial_len, int maxlen)
+{
+    int len = initial_len, c;
+    tui_puts(dest);
+    for (;;) {
+        c = tui_getch();
+        if (c == 0 || c == 224) { tui_getch(); continue; }
+        if (c == 13) break;
+        if (c == 8) {
+            if (len > 0) {
+                len--;
+                tui_putc('\b');
+                tui_putc(' ');
+                tui_putc('\b');
+            }
+            continue;
+        }
+        if (c == 27) { dest[0] = '\0'; return -1; }
+        if (c >= 32 && c < 127 && len < maxlen - 1) {
+            dest[len++] = (char)c;
+            tui_putc(c);
+        }
+    }
+    dest[len] = '\0';
+    return 0;
+}
 /* ---------- save with name prompt (if untitled) ---------- */
 
 static int save_current(void)
@@ -1263,6 +1306,116 @@ static void spell_check(void)
     left_col = 0;
     spell_marks_off(); 
 }
+static void current_time_str(char *out, int out_len)
+{
+    int h, m;
+    unsigned long elapsed;
+
+    if (!boot_time_str[0]) {
+        snprintf(out, out_len, "not available");
+        return;
+    }
+
+    h = (boot_time_str[11] - '0') * 10 + (boot_time_str[12] - '0');
+    m = (boot_time_str[14] - '0') * 10 + (boot_time_str[15] - '0');
+
+    elapsed = (tui_millis() - boot_time_millis) / 60000UL;
+    m += (int)(elapsed % 60);
+    h += (int)(elapsed / 60);
+    h %= 24;
+    m %= 60;
+
+    snprintf(out, out_len, "%.10s %02d:%02d", boot_time_str, h, m);
+}
+static void wifi_setup_page(void)
+{
+    char ssid[33];
+    char pass[65];
+    int have;
+    int connected;
+
+    have = tui_wifi_load(ssid, sizeof ssid, pass, sizeof pass);
+    connected = (boot_wifi_ssid[0] != '\0');
+
+    tui_clear();
+    tui_color(TUI_WHITE, TUI_BLACK);
+    tui_gotoxy(1, 1);
+    tui_puts("Wi-Fi Setup");
+
+    tui_gotoxy(1, 3);
+    if (connected) {
+        char line[80];
+        tui_color(TUI_LGREEN, TUI_BLACK);
+        snprintf(line, sizeof line, "Connected to: %s", boot_wifi_ssid);
+        tui_puts(line);
+        tui_color(TUI_WHITE, TUI_BLACK);
+    } else if (have) {
+        char line[80];
+        tui_color(TUI_LRED, TUI_BLACK);
+        snprintf(line, sizeof line, "Saved SSID: %s (not connected)", ssid);
+        tui_puts(line);
+        tui_color(TUI_WHITE, TUI_BLACK);
+    } else {
+        tui_puts("No network saved yet.");
+    }
+
+    tui_gotoxy(1, 5);
+    {
+        char now[32];
+        char line[80];
+        current_time_str(now, sizeof now);
+        snprintf(line, sizeof line, "Network time: %s", now);
+        tui_puts(line);
+    }
+
+    tui_gotoxy(1, 7);
+    tui_puts("Type new credentials to replace them,");
+    tui_gotoxy(1, 8);
+    tui_puts("or press Enter alone to keep current.");
+
+    tui_gotoxy(1, 10);
+    tui_puts("SSID: ");
+    ssid[0] = '\0';
+    if (prompt_line("", ssid, sizeof ssid) < 0) {
+        tui_color(TUI_LGRAY, TUI_BLACK);
+        tui_clear();
+        return;
+    }
+    if (!ssid[0]) {
+        tui_color(TUI_LGRAY, TUI_BLACK);
+        tui_clear();
+        return;
+    }
+
+    tui_gotoxy(1, 12);
+    tui_puts("Password: ");
+    pass[0] = '\0';
+    if (prompt_line("", pass, sizeof pass) < 0) {
+        tui_color(TUI_LGRAY, TUI_BLACK);
+        tui_clear();
+        return;
+    }
+
+    if (tui_wifi_save(ssid, pass)) {
+        tui_clear();
+        tui_color(TUI_WHITE, TUI_BLACK);
+        tui_gotoxy(1, 1);
+        tui_puts("Wi-Fi credentials saved.");
+        tui_gotoxy(1, 3);
+        tui_puts("Connects on next boot.");
+        tui_gotoxy(1, 5);
+        tui_puts("Press a key to return to the editor.");
+        tui_getch();
+    } else {
+        tui_clear();
+        tui_color(TUI_WHITE, TUI_RED);
+        tui_gotoxy(1, 1);
+        tui_puts("Failed to save credentials.");
+        tui_getch();
+    }
+    tui_color(TUI_LGRAY, TUI_BLACK);
+    tui_clear();
+}
 
 /* ---------- main ---------- */
 
@@ -1332,6 +1485,9 @@ int fable_main(int argc, char **argv)
             } else if (code == 61) {              /* F3 */
                 clear_mark();
                 save_current();
+            } else if (code == 67) {              /* F9: Wi-Fi setup */
+               clear_mark();
+               wifi_setup_page();
             } else if (code == 62) {              /* F4 */
                 spell_check();
             } else if (code == 63) {              /* F5: toggle spell marks */
@@ -1417,6 +1573,7 @@ int fable_main(int argc, char **argv)
                 }
             }
             break;
+        
         case 18:                                  /* Ctrl+R: find and replace all */
             {
                 char find_buf[128];
@@ -1425,8 +1582,34 @@ int fable_main(int argc, char **argv)
                 int n;
 
                 find_buf[0] = '\0';
+
+                /* Pre-fill from clipboard if short, single-line, printable */
+                if (clip_len > 0 && clip_len <= 15) {
+                    long i;
+                    int ok = 1;
+                    for (i = 0; i < clip_len; i++) {
+                        unsigned char c = (unsigned char)clip[i];
+                        if (c == '\n' || c == '\r' || c < 32 || c > 126) {
+                            ok = 0;
+                            break;
+                        }
+                    }
+                    if (ok) {
+                        memcpy(find_buf, clip, (size_t)clip_len);
+                        find_buf[clip_len] = '\0';
+                    }
+                }
+
                 prompt_bar("Find: ");
-                prompt_line("", find_buf, sizeof find_buf);
+                if (find_buf[0]) {
+                    if (prompt_line_edit(find_buf, (int)strlen(find_buf),
+                                        sizeof find_buf) < 0) {
+                        tui_color(TUI_LGRAY, TUI_BLACK);
+                        break;
+                    }
+                } else {
+                    prompt_line("", find_buf, sizeof find_buf);
+                }
                 tui_color(TUI_LGRAY, TUI_BLACK);
                 if (!find_buf[0]) break;
 
@@ -1450,6 +1633,7 @@ int fable_main(int argc, char **argv)
                 clear_mark();
             }
             break;
+
         case 14:                                  /* Ctrl+N */
             new_document();
             break;

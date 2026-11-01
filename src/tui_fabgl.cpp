@@ -5,6 +5,8 @@
 #include "tui.h"
 #include "file_fabgl.h"
 #include <string.h>
+#include <WiFi.h>
+#include <Preferences.h>
 
 static fabgl::VGA16Controller VGAController;   /* was fabgl::VGAController */
 //static fabgl::VGAController       VGAController;
@@ -46,6 +48,117 @@ static fabgl::Color tui_to_fabgl(int idx)
 }
 
 extern "C" {
+
+/* Scan for networks. Fills names[] with up to max SSIDs.
+ * Returns count, or -1 if Wi-Fi failed to start. */
+
+/* Scan for networks using the ESP-IDF low-level API.
+ * Fills names[] with up to max de-duplicated SSIDs.
+ * Returns count (>= 0), or -1 on hard failure. */
+
+ unsigned long tui_millis(void) { return millis(); }
+int tui_wifi_scan(char names[][33], int max)
+{
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    wifi_scan_config_t scan_cfg = {0};
+    uint16_t ap_count = 0;
+    wifi_ap_record_t *ap_list = NULL;
+    int out = 0, i, j;
+
+    /* hard reset the wifi driver */
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    /* re-init in station mode */
+    if (esp_wifi_init(&cfg) != ESP_OK)             return -1;
+    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) {
+        esp_wifi_deinit();
+        return -1;
+    }
+    if (esp_wifi_start() != ESP_OK) {
+        esp_wifi_deinit();
+        return -1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    /* blocking scan */
+    if (esp_wifi_scan_start(&scan_cfg, true) != ESP_OK) {
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return -1;
+    }
+    esp_wifi_scan_get_ap_num(&ap_count);
+
+    if (ap_count == 0) {
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return 0;
+    }
+
+    ap_list = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * ap_count);
+    if (!ap_list) {
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return -1;
+    }
+    if (esp_wifi_scan_get_ap_records(&ap_count, ap_list) != ESP_OK) {
+        free(ap_list);
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return -1;
+    }
+
+    /* de-duplicate by SSID */
+    for (i = 0; i < ap_count && out < max; i++) {
+        const char *ssid = (const char *)ap_list[i].ssid;
+        int dup = 0;
+        if (!ssid || !ssid[0]) continue;
+        for (j = 0; j < out; j++)
+            if (strcmp(names[j], ssid) == 0) { dup = 1; break; }
+        if (dup) continue;
+        strncpy(names[out], ssid, 32);
+        names[out][32] = '\0';
+        out++;
+    }
+    free(ap_list);
+
+    esp_wifi_stop();
+    esp_wifi_deinit();
+
+    return out;
+}
+
+/* Save SSID + password to NVS. Returns 1 on success. */
+int tui_wifi_save(const char *ssid, const char *pass)
+{
+    Preferences prefs;
+    if (!prefs.begin("wifi", false)) return 0;
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+    prefs.end();
+    return 1;
+}
+
+/* Read saved credentials. Returns 1 if present. */
+int tui_wifi_load(char *ssid, int ssid_len, char *pass, int pass_len)
+{
+    Preferences prefs;
+    if (!prefs.begin("wifi", true)) return 0;
+    String s = prefs.getString("ssid", "");
+    String p = prefs.getString("pass", "");
+    prefs.end();
+    if (s.length() == 0) return 0;
+    strncpy(ssid, s.c_str(), ssid_len - 1);
+    ssid[ssid_len - 1] = '\0';
+    strncpy(pass, p.c_str(), pass_len - 1);
+    pass[pass_len - 1] = '\0';
+    return 1;
+}
+
+
+
 
 /* ---------- frame buffer API ---------- */
 
@@ -181,6 +294,11 @@ static int vk_to_scancode(int vk)
     case fabgl::VK_F3:       return 61;
     case fabgl::VK_F4:       return 62;
     case fabgl::VK_F5:       return 63;
+    case fabgl::VK_F6:       return 64;
+    case fabgl::VK_F7:       return 65;
+    case fabgl::VK_F8:       return 66;
+    case fabgl::VK_F9:       return 67;
+    case fabgl::VK_F10:      return 68;
     default:                 return -1;
     }
 }
