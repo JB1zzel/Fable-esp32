@@ -158,7 +158,7 @@ pio run -t upload
 
 
 
-`dict.smd` is derived from SCOWL (Spell Checker Oriented Word Lists)
+'dict.smd' is derived from SCOWL (Spell Checker Oriented Word Lists)
 
 by Kevin Atkinson, used under its MIT-like license.
 
