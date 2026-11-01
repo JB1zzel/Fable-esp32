@@ -139,6 +139,18 @@ SD wiring on the TTGO VGA32: `SPI.begin(14, 2, 12, 13)` and `SD.begin(13)`.
 \---
 
 
+\## Dictionary
+
+
+
+'dict.smd' is derived from SCOWL (Spell Checker Oriented Word Lists)
+
+by Kevin Atkinson, used under its MIT-like license.
+
+See http://wordlist.aspell.net/ for details.
+
+\---
+
 
 \## Build
 
@@ -152,15 +164,4 @@ This project uses \[PlatformIO](https://platformio.org/).
 
 pio run -t upload
 
-
-
-\## Dictionary
-
-
-
-'dict.smd' is derived from SCOWL (Spell Checker Oriented Word Lists)
-
-by Kevin Atkinson, used under its MIT-like license.
-
-See http://wordlist.aspell.net/ for details.
 
