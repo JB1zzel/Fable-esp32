@@ -8,10 +8,14 @@
 #include "esp_heap_caps.h"
 #endif
 
-#define GW  40
-#define GH  20
-#define GOX 20
-#define GOY 15
+#define POP_X   20
+#define POP_Y   1
+#define POP_W   42
+#define POP_H   26
+#define GW      40
+#define GH      20
+#define GOX     (POP_X + 1)
+#define GOY     (POP_Y + 3)
 
 static int *tailX = NULL, *tailY = NULL;
 static int tailLen;
@@ -32,45 +36,76 @@ static void setup(void)
     fruitY = 1 + rand() % (GH - 2);
 }
 
-static void draw_border(void)
+static void draw_frame(void)
 {
     int i;
+    char buf[32];
 
     tui_color(TUI_WHITE, TUI_BLACK);
-    tui_gotoxy(GOX - 1, GOY - 1);
-    tui_putc(0xDA);                       /* ┌ */
-    for (i = 0; i < GW; i++) tui_putc(0xC4);
-    tui_putc(0xBF);                       /* ┐ */
 
+    /* top border */
+    tui_gotoxy(POP_X, POP_Y);
+    tui_putc(0xDA);
+    for (i = 0; i < POP_W - 2; i++) tui_putc(0xC4);
+    tui_putc(0xBF);
+
+    /* title row */
+    tui_gotoxy(POP_X, POP_Y + 1);
+    tui_putc(0xB3);
+    tui_gotoxy(POP_X + 1, POP_Y + 1);
+    for (i = 0; i < POP_W - 2; i++) tui_putc(' ');
+    tui_gotoxy(POP_X + 2, POP_Y + 1);
+    tui_puts("COBRA");
+
+    snprintf(buf, sizeof buf, "Score: %d", score);
+    tui_gotoxy(POP_X + POP_W - 2 - (int)strlen(buf), POP_Y + 1);
+    tui_puts(buf);
+
+    tui_gotoxy(POP_X + POP_W - 1, POP_Y + 1);
+    tui_putc(0xB3);
+
+    /* divider under title */
+    tui_gotoxy(POP_X, POP_Y + 2);
+    tui_putc(0xC3);
+    for (i = 0; i < POP_W - 2; i++) tui_putc(0xC4);
+    tui_putc(0xB4);
+
+    /* side borders for playfield rows */
     for (i = 0; i < GH; i++) {
-        tui_gotoxy(GOX - 1, GOY + i);
-        tui_putc(0xB3);                   /* │ */
-        tui_gotoxy(GOX + GW, GOY + i);
+        tui_gotoxy(POP_X, GOY + i);
+        tui_putc(0xB3);
+        tui_gotoxy(POP_X + POP_W - 1, GOY + i);
         tui_putc(0xB3);
     }
 
-    tui_gotoxy(GOX - 1, GOY + GH);
-    tui_putc(0xC0);                       /* └ */
-    for (i = 0; i < GW; i++) tui_putc(0xC4);
-    tui_putc(0xD9);                       /* ┘ */
+    /* divider after playfield */
+    tui_gotoxy(POP_X, POP_Y + GH + 3);
+    tui_putc(0xC3);
+    for (i = 0; i < POP_W - 2; i++) tui_putc(0xC4);
+    tui_putc(0xB4);
+
+    /* hints row */
+    tui_gotoxy(POP_X, POP_Y + GH + 4);
+    tui_putc(0xB3);
+    tui_gotoxy(POP_X + 1, POP_Y + GH + 4);
+    for (i = 0; i < POP_W - 2; i++) tui_putc(' ');
+    tui_gotoxy(POP_X + 2, POP_Y + GH + 4);
+    tui_puts("Arrows or WASD move    X or ESC to quit");
+    tui_gotoxy(POP_X + POP_W - 1, POP_Y + GH + 4);
+    tui_putc(0xB3);
+
+    /* bottom border */
+    tui_gotoxy(POP_X, POP_Y + GH + 5);
+    tui_putc(0xC0);
+    for (i = 0; i < POP_W - 2; i++) tui_putc(0xC4);
+    tui_putc(0xD9);
 }
 
 static void draw(void)
 {
     int i, j;
 
-    /* title bar */
-    tui_color(TUI_WHITE, TUI_BLACK);
-    tui_gotoxy(1, 1);
-    tui_puts("COBRA");
-    {
-        char buf[32];
-        snprintf(buf, sizeof buf, "Score: %d", score);
-        tui_gotoxy(80 - (int)strlen(buf) - 1, 1);
-        tui_puts(buf);
-    }
-
-    draw_border();
+    draw_frame();
 
     /* playfield contents */
     for (i = 0; i < GH; i++) {
@@ -99,13 +134,8 @@ static void draw(void)
             tui_putc(c);
         }
     }
-
-    /* footer hints */
-    tui_color(TUI_LGRAY, TUI_BLACK);
-    tui_gotoxy(1, GOY + GH + 2);
-    tui_puts("Arrows or WASD to move    X to quit");
-    tui_color(TUI_WHITE, TUI_BLACK);
 }
+
 static void handle_input(void)
 {
     while (tui_key_pending()) {
@@ -183,6 +213,8 @@ static void step(void)
 }
 int fb_snake(void)
 {
+    int i, j;  
+ 
     if (!tailX) {
         tailX = (int *)heap_caps_malloc(100 * sizeof(int), MALLOC_CAP_SPIRAM);
         tailY = (int *)heap_caps_malloc(100 * sizeof(int), MALLOC_CAP_SPIRAM);
@@ -190,7 +222,7 @@ int fb_snake(void)
     }
 
     tui_cursor(0, 0);
-    tui_clear();
+    //tui_clear();
 
     setup();
 
@@ -201,21 +233,24 @@ int fb_snake(void)
         tui_delay(120);
     }
 
-    tui_clear();
+    /* clear the playfield area and show game over inside the frame */
     tui_color(TUI_WHITE, TUI_BLACK);
-    tui_gotoxy(1, 1);
-    tui_puts("Game Over");
+    for (i = 0; i < GH; i++) {
+        tui_gotoxy(GOX, GOY + i);
+        for (j = 0; j < GW; j++) tui_putc(' ');
+    }
     {
         char buf[32];
+        tui_gotoxy(GOX + (GW - 9) / 2, GOY + GH / 2 - 1);
+        tui_puts("GAME OVER");
         snprintf(buf, sizeof buf, "Score: %d", score);
-        tui_gotoxy(1, 3);
+        tui_gotoxy(GOX + (GW - (int)strlen(buf)) / 2, GOY + GH / 2 + 1);
         tui_puts(buf);
+        tui_gotoxy(GOX + (GW - 21) / 2, GOY + GH / 2 + 3);
+        tui_puts("Press any key to exit");
     }
-    tui_gotoxy(1, 5);
-    tui_puts("Press any key to return to the editor.");
     tui_getch();
 
     tui_cursor(1, 0);
-    tui_clear();
     return 0;
 }
