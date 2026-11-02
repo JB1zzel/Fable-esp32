@@ -21,9 +21,11 @@ extern "C" void set_boot_wifi_ssid(const char *s);
 
 static void log_heap(const char *tag)
 {
-    Serial.printf("HEAP %-14s internal free=%u largest=%u\n", tag,
+    Serial.printf("HEAP %-14s internal free=%u largest=%u | dma free=%u largest=%u\n", tag,
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
 }
 
 static bool wifi_connect(const char *ssid, const char *pass)
@@ -106,7 +108,9 @@ void setup() {
 
     /* Wi-Fi connect + NTP BEFORE VGA (frees RAM before framebuffer alloc) */
     log_heap("before wifi");
+#ifndef FABLE_NO_WIFI_BOOT      /* build with -DFABLE_NO_WIFI_BOOT to test without Wi-Fi */
     fetch_time_at_boot();
+#endif
     log_heap("after wifi");
 
     /* SD card */

@@ -196,14 +196,18 @@ void tui_init(void)
     PS2Controller.begin(GPIO_NUM_33, GPIO_NUM_32, GPIO_NUM_26, GPIO_NUM_27);
     Keyboard.begin(true, true, 0);
 
-    Serial.printf("HEAP before VGA   internal free=%u largest=%u\n",
+    Serial.printf("HEAP before VGA   internal free=%u largest=%u | dma free=%u largest=%u\n",
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     VGAController.begin();
     VGAController.setResolution(VGA_640x480_60Hz);
-    Serial.printf("HEAP after VGA    internal free=%u largest=%u\n",
+    Serial.printf("HEAP after VGA    internal free=%u largest=%u | dma free=%u largest=%u\n",
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
 
     Terminal.begin(&VGAController);
     Terminal.loadFont(&fabgl::FONT_8x8);

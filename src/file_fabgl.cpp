@@ -110,6 +110,13 @@ int fab_remove(const char *path)
     return SD.remove(fullpath) ? 0 : -1;
 }
 
+int fab_exists(const char *path)
+{
+    char fullpath[FAB_PATH_MAX];
+    make_full(path, fullpath, sizeof fullpath);
+    return SD.exists(fullpath) ? 1 : 0;
+}
+
 int fab_rename(const char *from, const char *to)
 {
     char a[FAB_PATH_MAX], b[FAB_PATH_MAX];

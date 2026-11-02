@@ -637,8 +637,10 @@ static char trunc_name[260] = "";
  * (the current buffer is left untouched in that case) */
 static int load_file(const char *fn)
 {
-    FILE *f = fopen(fn, "rb");
+    FILE *f;
     int c;
+    if (!fab_exists(fn)) return 0;         /* avoids a VFS error log */
+    f = fopen(fn, "rb");
     if (!f) return 0;
     load_truncated = 0;
     nlines = 0;
@@ -705,7 +707,7 @@ static int save_file(void)
     if (fclose(f) == EOF) ok = 0;
     if (!ok) { fab_remove(tmp_path); return 0; }
 
-    fab_remove(filename);                       /* fine if it did not exist */
+    if (fab_exists(filename)) fab_remove(filename);
     if (fab_rename(tmp_path, filename) != 0) return 0;  /* data kept in .tmp */
 
     modified = 0;

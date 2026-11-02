@@ -35,6 +35,9 @@ int   fab_list_dir(const char *path, char names[][32], int max);
 /* Rename (replaces nothing: remove the destination first). 0 = ok. */
 int   fab_rename(const char *from, const char *to);
 
+/* 1 if the path exists (no error is logged when it does not). */
+int   fab_exists(const char *path);
+
 #ifdef __cplusplus
 }
 #endif

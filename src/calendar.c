@@ -3,14 +3,15 @@
  * Draws a month calendar on the TUI, lets the user navigate days/months,
  * and returns the day number the user selected (or 0 if they pressed Esc).
  *
- * Nothing in this file knows about the editor, the clipboard, or files.
- * It talks only to tui.h.
+ * Nothing in this file knows about the editor or the clipboard. It talks
+ * to tui.h, plus fab_exists() to mark days that already have a diary file.
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include "tui.h"
+#include "file_fabgl.h"
 
 #define CAL_COLS    7
 #define CAL_CELL_W  4
@@ -67,8 +68,9 @@ static const char *month_name(int m)
 
 /* ty/tm/td = today's date; the "today" mark is only drawn when the
  * displayed month is that month (td == 0 means clock unknown). */
+/* entries: bit (d-1) set = /diary/YYYY-MM-DD.txt exists for day d */
 static void draw_calendar(int year, int month, int sel_day,
-                          int ty, int tm, int td)
+                          int ty, int tm, int td, unsigned long entries)
 {
     int first_dow, d, row, col, dim;
     char line[80];
@@ -110,6 +112,14 @@ static void draw_calendar(int year, int month, int sel_day,
             tui_puts(cell);
         }
 
+        /* "*" in the spare column right after the number */
+        if (entries & (1UL << (d - 1))) {
+            tui_gotoxy(CAL_GRID_X + col * CAL_CELL_W + 3, row);
+            tui_color(TUI_LGREEN, TUI_BLACK);
+            tui_puts("*");
+            tui_color(TUI_WHITE, TUI_BLACK);
+        }
+
         col++;
         if (col >= CAL_COLS) { col = 0; row++; }
     }
@@ -119,6 +129,23 @@ static void draw_calendar(int year, int month, int sel_day,
     tui_puts("Arrows: move    PgUp/PgDn: month");
     tui_gotoxy(1, CAL_GRID_Y + 9);
     tui_puts("Enter: open day    Esc: back");
+    tui_gotoxy(1, CAL_GRID_Y + 10);
+    tui_puts("* = has an entry");
+}
+
+/* Looks for a diary file for each day of the month. Only called when the
+ * displayed month changes, not on every key press. */
+static unsigned long scan_entries(int year, int month)
+{
+    unsigned long mask = 0;
+    int d, dim = days_in_month(year, month);
+    char path[32];
+
+    for (d = 1; d <= dim; d++) {
+        snprintf(path, sizeof path, "/diary/%04d-%02d-%02d.txt", year, month, d);
+        if (fab_exists(path)) mask |= 1UL << (d - 1);
+    }
+    return mask;
 }
 
 /* ---------- main entry ---------- */
@@ -160,6 +187,8 @@ int calendar_show(const char *now, char *out_path, int out_len)
 {
     int year, month, ty = 0, tm = 0, td = 0;
     int sel, dim, c, code;
+    int scan_y = -1, scan_m = -1;
+    unsigned long entries = 0;
 
     if (parse_date(now, &ty, &tm, &td)) {
         year = ty; month = tm; sel = td;
@@ -170,7 +199,11 @@ int calendar_show(const char *now, char *out_path, int out_len)
     }
 
     for (;;) {
-        draw_calendar(year, month, sel, ty, tm, td);
+        if (year != scan_y || month != scan_m) {
+            entries = scan_entries(year, month);
+            scan_y = year; scan_m = month;
+        }
+        draw_calendar(year, month, sel, ty, tm, td, entries);
         c = tui_getch();
         if (c == 27) return 0;                       /* Esc */
         if (c == 13) {                               /* Enter */
