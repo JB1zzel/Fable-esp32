@@ -11,6 +11,8 @@
 #define SCRW     80
 #define SCRH     55   /* 55 text rows + 1 status row = 56 total (see FabGL DMA reserve) */
 
+//snake game
+int fb_snake(void);
 /* prompt.c - single-line input on the current cursor position.
  * Return 0 on Enter, -1 on Esc (dest is then empty). */
 int  fb_prompt_line(const char *prompt, char *dest, int maxlen);

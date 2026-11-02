@@ -13,7 +13,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+//snake
+void tui_delay(int ms);
 /* Colour indices, IBM-PC / ANSI compatible (0-15) */
 #define TUI_BLACK     0
 #define TUI_BLUE      1
@@ -64,6 +65,7 @@ int tui_list_dir(const char *path, char names[][32], int max);
 void tui_exe_dir(char *out, int len);   /* folder containing the exe, trailing slash; "" on ESP32 */
 unsigned long tui_millis(void);
 #ifdef __cplusplus
+
 }
 #endif
 

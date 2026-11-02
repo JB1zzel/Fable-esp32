@@ -49,7 +49,11 @@ static fabgl::Color tui_to_fabgl(int idx)
 }
 
 extern "C" {
-
+    //snake
+void tui_delay(int ms)
+{
+    delay(ms);
+}
 /* Scan for networks. Fills names[] with up to max SSIDs.
  * Returns count, or -1 if Wi-Fi failed to start. */
 

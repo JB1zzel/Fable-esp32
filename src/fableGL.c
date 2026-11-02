@@ -1259,6 +1259,9 @@ int fable_main(int argc, char **argv)
             } else if (code == 61) {              /* F3 */
                 clear_mark();
                 save_current();
+            } else if (code == 65) {              /* F7: snake */
+                clear_mark();
+                fb_snake();
             } else if (code == 64) {              /* F6: calendar */
                 char path[64];
                 clear_mark();
