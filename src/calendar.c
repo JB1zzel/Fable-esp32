@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include "tui.h"
 
 #define CAL_COLS    7
@@ -64,7 +65,10 @@ static const char *month_name(int m)
     return names[m];
 }
 
-static void draw_calendar(int year, int month, int sel_day, int today)
+/* ty/tm/td = today's date; the "today" mark is only drawn when the
+ * displayed month is that month (td == 0 means clock unknown). */
+static void draw_calendar(int year, int month, int sel_day,
+                          int ty, int tm, int td)
 {
     int first_dow, d, row, col, dim;
     char line[80];
@@ -98,7 +102,7 @@ static void draw_calendar(int year, int month, int sel_day, int today)
             tui_color(TUI_BLACK, TUI_LGRAY);
             tui_puts(cell);
             tui_color(TUI_WHITE, TUI_BLACK);
-        } else if (d == today) {
+        } else if (year == ty && month == tm && d == td) {
             tui_color(TUI_YELLOW, TUI_BLACK);
             tui_puts(cell);
             tui_color(TUI_WHITE, TUI_BLACK);
@@ -119,30 +123,54 @@ static void draw_calendar(int year, int month, int sel_day, int today)
 
 /* ---------- main entry ---------- */
 
-/* Returns the day number (1..31) the user chose, or 0 to cancel.
- * year/month are in/out: on entry they are the month to show,
- * on return they are the month the user ended on (so the caller
- * knows which month the chosen day belongs to). */
-int calendar_show(const char *boot_time, char *out_path, int out_len)
+/* "YYYY-MM-DD..." -> y/m/d. Returns 1 if it looks valid. */
+static int parse_date(const char *s, int *y, int *m, int *d)
 {
-    int year = 2026, month = 1, today = 1;
+    int i;
+    if (!s || strlen(s) < 10) return 0;
+    for (i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) { if (s[i] != '-') return 0; }
+        else if (!isdigit((unsigned char)s[i])) return 0;
+    }
+    *y = (s[0]-'0')*1000 + (s[1]-'0')*100 + (s[2]-'0')*10 + (s[3]-'0');
+    *m = (s[5]-'0')*10 + (s[6]-'0');
+    *d = (s[8]-'0')*10 + (s[9]-'0');
+    if (*m < 1 || *m > 12) return 0;
+    if (*d < 1 || *d > days_in_month(*y, *m)) return 0;
+    return 1;
+}
+
+/* Fallback when the clock is not synced: the firmware's build date
+ * (__DATE__ is "Mmm dd yyyy"). */
+static void build_date(int *y, int *m)
+{
+    static const char *mon = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char *d = __DATE__;
+    int i;
+    *m = 1;
+    for (i = 0; i < 12; i++)
+        if (strncmp(d, mon + i * 3, 3) == 0) { *m = i + 1; break; }
+    *y = (d[7]-'0')*1000 + (d[8]-'0')*100 + (d[9]-'0')*10 + (d[10]-'0');
+}
+
+/* now = "YYYY-MM-DD HH:MM" from the system clock, or "" if not synced.
+ * Returns 1 and fills out_path with /diary/YYYY-MM-DD.txt if a day was
+ * chosen, 0 if the user pressed Esc. */
+int calendar_show(const char *now, char *out_path, int out_len)
+{
+    int year, month, ty = 0, tm = 0, td = 0;
     int sel, dim, c, code;
 
-    /* parse boot_time = "YYYY-MM-DD HH:MM" */
-    if (boot_time && boot_time[0]) {
-        year  = (boot_time[0]-'0')*1000 + (boot_time[1]-'0')*100
-              + (boot_time[2]-'0')*10   + (boot_time[3]-'0');
-        month = (boot_time[5]-'0')*10   + (boot_time[6]-'0');
-        today = (boot_time[8]-'0')*10   + (boot_time[9]-'0');
+    if (parse_date(now, &ty, &tm, &td)) {
+        year = ty; month = tm; sel = td;
+    } else {
+        ty = tm = td = 0;                 /* no "today" mark */
+        build_date(&year, &month);
+        sel = 1;
     }
-    if (month < 1 || month > 12) month = 1;
-
-    dim = days_in_month(year, month);
-    if (today < 1 || today > dim) today = 1;
-    sel = today;
 
     for (;;) {
-        draw_calendar(year, month, sel, today);
+        draw_calendar(year, month, sel, ty, tm, td);
         c = tui_getch();
         if (c == 27) return 0;                       /* Esc */
         if (c == 13) {                               /* Enter */

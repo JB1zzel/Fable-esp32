@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 #include "tui.h"
 #include "tinyspell.h"
 #include "file_fabgl.h"
@@ -47,16 +48,7 @@
 //#define SCRH     28
 
 
-static char          boot_time_str[32] = "";
 static char          boot_wifi_ssid[33] = "";
-static unsigned long boot_time_millis = 0;     /* <-- new */
-
-void set_boot_time(const char *s)
-{
-    strncpy(boot_time_str, s, sizeof(boot_time_str) - 1);
-    boot_time_str[sizeof(boot_time_str) - 1] = '\0';
-    boot_time_millis = tui_millis();               /* <-- new to get actuall time*/
-}
 
 void set_boot_wifi_ssid(const char *s)
 {
@@ -66,7 +58,7 @@ void set_boot_wifi_ssid(const char *s)
 
 #define IS_WORD(c) (isalnum((unsigned char)(c)) || (c) == '_')
 static char (*lines)[MAXLINE] = NULL;
-int calendar_show(const char *boot_time, char *out_path, int out_len);
+int calendar_show(const char *now, char *out_path, int out_len);
 static int change_counter = 0;
 static int cached_words = 0;
 static int cached_words_counter = -1;
@@ -148,7 +140,7 @@ static void spell_line_dirty(int line)
 static void spell_mark_all(void)
 {
     int i;
-    memset(spell_bad, 0, sizeof(spell_bad));
+    memset(spell_bad, 0, (size_t)MAXLINES * (MAXLINE / 8));
     for (i = 0; i < nlines; i++) spell_mark_line(i);
 }
 
@@ -633,17 +625,29 @@ static void help_screen(void)
 }
 /* ---------- file io ---------- */
 
-static void load_file(const char *fn)
+static void status_msg(const char *msg);
+
+/* Set when a file did not fit (more than MAXLINES lines, or a line longer
+ * than MAXLINE-1). Saving over that file is then refused so the original
+ * is never replaced by a shortened copy. */
+static int  load_truncated = 0;
+static char trunc_name[260] = "";
+
+/* returns 1 if the file was loaded, 0 if it could not be opened
+ * (the current buffer is left untouched in that case) */
+static int load_file(const char *fn)
 {
     FILE *f = fopen(fn, "rb");
     int c;
-    if (!f) return;
+    if (!f) return 0;
+    load_truncated = 0;
     nlines = 0;
     for (;;) {
         int len = 0;
         c = fgetc(f);
         while (c != EOF && c != '\n' && c != '\r') {
             if (len < MAXLINE - 1) lines[nlines][len++] = (char)c;
+            else load_truncated = 1;
             c = fgetc(f);
         }
         lines[nlines][len] = '\0';
@@ -653,25 +657,57 @@ static void load_file(const char *fn)
             int c2 = fgetc(f);
             if (c2 != '\n' && c2 != EOF) ungetc(c2, f);
         }
-        if (nlines >= MAXLINES) break;
+        if (nlines >= MAXLINES) {
+            if (fgetc(f) != EOF) load_truncated = 1;   /* more data left */
+            break;
+        }
     }
     fclose(f);
     if (nlines == 0) { lines[0][0] = '\0'; nlines = 1; }
     modified = 0;
     top_line = 0;
     left_col = 0;
+    cur_line = 0;
+    cur_col = 0;
+    clear_mark();
+    spell_marks_off();
+    if (load_truncated) {
+        strncpy(trunc_name, fn, sizeof(trunc_name) - 1);
+        trunc_name[sizeof(trunc_name) - 1] = '\0';
+        status_msg("File too big (max 256 lines / 1023 cols): saving it is disabled");
+        tui_getch();
+    }
+    return 1;
 }
 
+/* Writes to <name>.tmp first, and only replaces the real file once the
+ * whole temp file has been written and closed without error. If power
+ * fails mid-save the original is still intact. */
 static int save_file(void)
 {
-    FILE *f = fopen(filename, "wb");
-    int i;
+    char tmp_path[264];
+    FILE *f;
+    int i, ok = 1;
+
+    if (load_truncated && strcmp(filename, trunc_name) == 0) {
+        status_msg("Not saved: file was truncated when loaded (256 lines / 1023 cols)");
+        tui_getch();
+        return 0;
+    }
+
+    snprintf(tmp_path, sizeof tmp_path, "%s.tmp", filename);
+    f = fopen(tmp_path, "wb");
     if (!f) return 0;
     for (i = 0; i < nlines; i++) {
-        fputs(lines[i], f);
-        if (i < nlines - 1) fputs("\r\n", f);
+        if (fputs(lines[i], f) == EOF) ok = 0;
+        if (i < nlines - 1 && fputs("\r\n", f) == EOF) ok = 0;
     }
-    fclose(f);
+    if (fclose(f) == EOF) ok = 0;
+    if (!ok) { fab_remove(tmp_path); return 0; }
+
+    fab_remove(filename);                       /* fine if it did not exist */
+    if (fab_rename(tmp_path, filename) != 0) return 0;  /* data kept in .tmp */
+
     modified = 0;
     return 1;
 }
@@ -1306,27 +1342,24 @@ static void spell_check(void)
     left_col = 0;
     spell_marks_off(); 
 }
+/* Reads the ESP32 system clock (set by NTP at boot, keeps running after
+ * Wi-Fi is switched off). Writes "YYYY-MM-DD HH:MM" local time, or an
+ * empty string if the clock has never been synced. */
 static void current_time_str(char *out, int out_len)
 {
-    int h, m;
-    unsigned long elapsed;
+    time_t t = time(NULL);
+    struct tm tm;
 
-    if (!boot_time_str[0]) {
-        snprintf(out, out_len, "not available");
+    if (t < 1700000000) {              /* before Nov 2023 = not synced */
+        out[0] = '\0';
         return;
     }
-
-    h = (boot_time_str[11] - '0') * 10 + (boot_time_str[12] - '0');
-    m = (boot_time_str[14] - '0') * 10 + (boot_time_str[15] - '0');
-
-    elapsed = (tui_millis() - boot_time_millis) / 60000UL;
-    m += (int)(elapsed % 60);
-    h += (int)(elapsed / 60);
-    h %= 24;
-    m %= 60;
-
-    snprintf(out, out_len, "%.10s %02d:%02d", boot_time_str, h, m);
+    localtime_r(&t, &tm);
+    snprintf(out, out_len, "%04d-%02d-%02d %02d:%02d",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min);
 }
+
 static void wifi_setup_page(void)
 {
     char ssid[33];
@@ -1364,7 +1397,7 @@ static void wifi_setup_page(void)
         char now[32];
         char line[80];
         current_time_str(now, sizeof now);
-        snprintf(line, sizeof line, "Network time: %s", now);
+        snprintf(line, sizeof line, "Network time: %s", now[0] ? now : "not available");
         tui_puts(line);
     }
 
@@ -1487,9 +1520,21 @@ int fable_main(int argc, char **argv)
                 save_current();
             } else if (code == 64) {              /* F6: calendar */
                 char path[64];
+                char now[32];
                 clear_mark();
-                if (calendar_show(boot_time_str, path, sizeof path)) {
-                    load_file(path);
+                current_time_str(now, sizeof now);
+                if (calendar_show(now, path, sizeof path)) {
+                    if (!load_file(path)) {
+                        /* new diary day: start with an empty buffer so we
+                         * never save the previous document into this file */
+                        nlines = 1;
+                        lines[0][0] = '\0';
+                        modified = 0;
+                        top_line = left_col = 0;
+                        cur_line = cur_col = 0;
+                        clear_mark();
+                        spell_marks_off();
+                    }
                     strncpy(filename, path, sizeof(filename) - 1);
                     filename[sizeof(filename) - 1] = '\0';
                 }
@@ -1534,8 +1579,15 @@ int fable_main(int argc, char **argv)
                 char path[260];
                 path[0] = '\0';
                 prompt_bar("Open: ");
-                if (prompt_line("", path, sizeof path) >= 0 && path[0])
-                    load_file(path);
+                if (prompt_line("", path, sizeof path) >= 0 && path[0]) {
+                    if (load_file(path)) {
+                        strncpy(filename, path, sizeof(filename) - 1);
+                        filename[sizeof(filename) - 1] = '\0';
+                    } else {
+                        status_msg("File not found");
+                        tui_getch();
+                    }
+                }
                 tui_color(TUI_LGRAY, TUI_BLACK);
             }
             break;

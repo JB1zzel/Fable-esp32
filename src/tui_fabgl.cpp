@@ -7,6 +7,7 @@
 #include <string.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <esp_heap_caps.h>
 
 static fabgl::VGA16Controller VGAController;   /* was fabgl::VGAController */
 //static fabgl::VGAController       VGAController;
@@ -195,8 +196,14 @@ void tui_init(void)
     PS2Controller.begin(GPIO_NUM_33, GPIO_NUM_32, GPIO_NUM_26, GPIO_NUM_27);
     Keyboard.begin(true, true, 0);
 
+    Serial.printf("HEAP before VGA   internal free=%u largest=%u\n",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     VGAController.begin();
     VGAController.setResolution(VGA_640x480_60Hz);
+    Serial.printf("HEAP after VGA    internal free=%u largest=%u\n",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
     Terminal.begin(&VGAController);
     Terminal.loadFont(&fabgl::FONT_8x8);

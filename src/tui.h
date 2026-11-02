@@ -50,7 +50,6 @@ void tui_puts(const char *s);
 void tui_cursor(int visible, int block); /* block=1 solid, block=0 underline */
 void tui_boot_colors(int delay_ms);
 /* wifi */
-void set_boot_time(const char *s);
 void set_boot_wifi_ssid(const char *s);
 
 int tui_wifi_scan(char names[][33], int max);

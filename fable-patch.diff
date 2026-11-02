@@ -1,0 +1,648 @@
+diff -ru /home/claude/orig/src/calendar.c Fable-esp32-main/src/calendar.c
+--- /home/claude/orig/src/calendar.c	2026-11-02 08:22:37.545445302 +0000
++++ Fable-esp32-main/src/calendar.c	2026-11-02 08:23:06.537756543 +0000
+@@ -9,6 +9,7 @@
+ 
+ #include <stdio.h>
+ #include <string.h>
++#include <ctype.h>
+ #include "tui.h"
+ 
+ #define CAL_COLS    7
+@@ -64,7 +65,10 @@
+     return names[m];
+ }
+ 
+-static void draw_calendar(int year, int month, int sel_day, int today)
++/* ty/tm/td = today's date; the "today" mark is only drawn when the
++ * displayed month is that month (td == 0 means clock unknown). */
++static void draw_calendar(int year, int month, int sel_day,
++                          int ty, int tm, int td)
+ {
+     int first_dow, d, row, col, dim;
+     char line[80];
+@@ -98,7 +102,7 @@
+             tui_color(TUI_BLACK, TUI_LGRAY);
+             tui_puts(cell);
+             tui_color(TUI_WHITE, TUI_BLACK);
+-        } else if (d == today) {
++        } else if (year == ty && month == tm && d == td) {
+             tui_color(TUI_YELLOW, TUI_BLACK);
+             tui_puts(cell);
+             tui_color(TUI_WHITE, TUI_BLACK);
+@@ -119,30 +123,54 @@
+ 
+ /* ---------- main entry ---------- */
+ 
+-/* Returns the day number (1..31) the user chose, or 0 to cancel.
+- * year/month are in/out: on entry they are the month to show,
+- * on return they are the month the user ended on (so the caller
+- * knows which month the chosen day belongs to). */
+-int calendar_show(const char *boot_time, char *out_path, int out_len)
++/* "YYYY-MM-DD..." -> y/m/d. Returns 1 if it looks valid. */
++static int parse_date(const char *s, int *y, int *m, int *d)
+ {
+-    int year = 2026, month = 1, today = 1;
++    int i;
++    if (!s || strlen(s) < 10) return 0;
++    for (i = 0; i < 10; i++) {
++        if (i == 4 || i == 7) { if (s[i] != '-') return 0; }
++        else if (!isdigit((unsigned char)s[i])) return 0;
++    }
++    *y = (s[0]-'0')*1000 + (s[1]-'0')*100 + (s[2]-'0')*10 + (s[3]-'0');
++    *m = (s[5]-'0')*10 + (s[6]-'0');
++    *d = (s[8]-'0')*10 + (s[9]-'0');
++    if (*m < 1 || *m > 12) return 0;
++    if (*d < 1 || *d > days_in_month(*y, *m)) return 0;
++    return 1;
++}
++
++/* Fallback when the clock is not synced: the firmware's build date
++ * (__DATE__ is "Mmm dd yyyy"). */
++static void build_date(int *y, int *m)
++{
++    static const char *mon = "JanFebMarAprMayJunJulAugSepOctNovDec";
++    const char *d = __DATE__;
++    int i;
++    *m = 1;
++    for (i = 0; i < 12; i++)
++        if (strncmp(d, mon + i * 3, 3) == 0) { *m = i + 1; break; }
++    *y = (d[7]-'0')*1000 + (d[8]-'0')*100 + (d[9]-'0')*10 + (d[10]-'0');
++}
++
++/* now = "YYYY-MM-DD HH:MM" from the system clock, or "" if not synced.
++ * Returns 1 and fills out_path with /diary/YYYY-MM-DD.txt if a day was
++ * chosen, 0 if the user pressed Esc. */
++int calendar_show(const char *now, char *out_path, int out_len)
++{
++    int year, month, ty = 0, tm = 0, td = 0;
+     int sel, dim, c, code;
+ 
+-    /* parse boot_time = "YYYY-MM-DD HH:MM" */
+-    if (boot_time && boot_time[0]) {
+-        year  = (boot_time[0]-'0')*1000 + (boot_time[1]-'0')*100
+-              + (boot_time[2]-'0')*10   + (boot_time[3]-'0');
+-        month = (boot_time[5]-'0')*10   + (boot_time[6]-'0');
+-        today = (boot_time[8]-'0')*10   + (boot_time[9]-'0');
++    if (parse_date(now, &ty, &tm, &td)) {
++        year = ty; month = tm; sel = td;
++    } else {
++        ty = tm = td = 0;                 /* no "today" mark */
++        build_date(&year, &month);
++        sel = 1;
+     }
+-    if (month < 1 || month > 12) month = 1;
+-
+-    dim = days_in_month(year, month);
+-    if (today < 1 || today > dim) today = 1;
+-    sel = today;
+ 
+     for (;;) {
+-        draw_calendar(year, month, sel, today);
++        draw_calendar(year, month, sel, ty, tm, td);
+         c = tui_getch();
+         if (c == 27) return 0;                       /* Esc */
+         if (c == 13) {                               /* Enter */
+diff -ru /home/claude/orig/src/fableGL.c Fable-esp32-main/src/fableGL.c
+--- /home/claude/orig/src/fableGL.c	2026-11-02 08:22:37.545956094 +0000
++++ Fable-esp32-main/src/fableGL.c	2026-11-02 08:36:48.424313296 +0000
+@@ -35,6 +35,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <ctype.h>
++#include <time.h>
+ #include "tui.h"
+ #include "tinyspell.h"
+ #include "file_fabgl.h"
+@@ -47,16 +48,7 @@
+ //#define SCRH     28
+ 
+ 
+-static char          boot_time_str[32] = "";
+ static char          boot_wifi_ssid[33] = "";
+-static unsigned long boot_time_millis = 0;     /* <-- new */
+-
+-void set_boot_time(const char *s)
+-{
+-    strncpy(boot_time_str, s, sizeof(boot_time_str) - 1);
+-    boot_time_str[sizeof(boot_time_str) - 1] = '\0';
+-    boot_time_millis = tui_millis();               /* <-- new to get actuall time*/
+-}
+ 
+ void set_boot_wifi_ssid(const char *s)
+ {
+@@ -66,7 +58,7 @@
+ 
+ #define IS_WORD(c) (isalnum((unsigned char)(c)) || (c) == '_')
+ static char (*lines)[MAXLINE] = NULL;
+-int calendar_show(const char *boot_time, char *out_path, int out_len);
++int calendar_show(const char *now, char *out_path, int out_len);
+ static int change_counter = 0;
+ static int cached_words = 0;
+ static int cached_words_counter = -1;
+@@ -148,7 +140,7 @@
+ static void spell_mark_all(void)
+ {
+     int i;
+-    memset(spell_bad, 0, sizeof(spell_bad));
++    memset(spell_bad, 0, (size_t)MAXLINES * (MAXLINE / 8));
+     for (i = 0; i < nlines; i++) spell_mark_line(i);
+ }
+ 
+@@ -633,17 +625,29 @@
+ }
+ /* ---------- file io ---------- */
+ 
+-static void load_file(const char *fn)
++static void status_msg(const char *msg);
++
++/* Set when a file did not fit (more than MAXLINES lines, or a line longer
++ * than MAXLINE-1). Saving over that file is then refused so the original
++ * is never replaced by a shortened copy. */
++static int  load_truncated = 0;
++static char trunc_name[260] = "";
++
++/* returns 1 if the file was loaded, 0 if it could not be opened
++ * (the current buffer is left untouched in that case) */
++static int load_file(const char *fn)
+ {
+     FILE *f = fopen(fn, "rb");
+     int c;
+-    if (!f) return;
++    if (!f) return 0;
++    load_truncated = 0;
+     nlines = 0;
+     for (;;) {
+         int len = 0;
+         c = fgetc(f);
+         while (c != EOF && c != '\n' && c != '\r') {
+             if (len < MAXLINE - 1) lines[nlines][len++] = (char)c;
++            else load_truncated = 1;
+             c = fgetc(f);
+         }
+         lines[nlines][len] = '\0';
+@@ -653,25 +657,57 @@
+             int c2 = fgetc(f);
+             if (c2 != '\n' && c2 != EOF) ungetc(c2, f);
+         }
+-        if (nlines >= MAXLINES) break;
++        if (nlines >= MAXLINES) {
++            if (fgetc(f) != EOF) load_truncated = 1;   /* more data left */
++            break;
++        }
+     }
+     fclose(f);
+     if (nlines == 0) { lines[0][0] = '\0'; nlines = 1; }
+     modified = 0;
+     top_line = 0;
+     left_col = 0;
++    cur_line = 0;
++    cur_col = 0;
++    clear_mark();
++    spell_marks_off();
++    if (load_truncated) {
++        strncpy(trunc_name, fn, sizeof(trunc_name) - 1);
++        trunc_name[sizeof(trunc_name) - 1] = '\0';
++        status_msg("File too big (max 256 lines / 1023 cols): saving it is disabled");
++        tui_getch();
++    }
++    return 1;
+ }
+ 
++/* Writes to <name>.tmp first, and only replaces the real file once the
++ * whole temp file has been written and closed without error. If power
++ * fails mid-save the original is still intact. */
+ static int save_file(void)
+ {
+-    FILE *f = fopen(filename, "wb");
+-    int i;
++    char tmp_path[264];
++    FILE *f;
++    int i, ok = 1;
++
++    if (load_truncated && strcmp(filename, trunc_name) == 0) {
++        status_msg("Not saved: file was truncated when loaded (256 lines / 1023 cols)");
++        tui_getch();
++        return 0;
++    }
++
++    snprintf(tmp_path, sizeof tmp_path, "%s.tmp", filename);
++    f = fopen(tmp_path, "wb");
+     if (!f) return 0;
+     for (i = 0; i < nlines; i++) {
+-        fputs(lines[i], f);
+-        if (i < nlines - 1) fputs("\r\n", f);
++        if (fputs(lines[i], f) == EOF) ok = 0;
++        if (i < nlines - 1 && fputs("\r\n", f) == EOF) ok = 0;
+     }
+-    fclose(f);
++    if (fclose(f) == EOF) ok = 0;
++    if (!ok) { fab_remove(tmp_path); return 0; }
++
++    fab_remove(filename);                       /* fine if it did not exist */
++    if (fab_rename(tmp_path, filename) != 0) return 0;  /* data kept in .tmp */
++
+     modified = 0;
+     return 1;
+ }
+@@ -1306,27 +1342,24 @@
+     left_col = 0;
+     spell_marks_off(); 
+ }
++/* Reads the ESP32 system clock (set by NTP at boot, keeps running after
++ * Wi-Fi is switched off). Writes "YYYY-MM-DD HH:MM" local time, or an
++ * empty string if the clock has never been synced. */
+ static void current_time_str(char *out, int out_len)
+ {
+-    int h, m;
+-    unsigned long elapsed;
++    time_t t = time(NULL);
++    struct tm tm;
+ 
+-    if (!boot_time_str[0]) {
+-        snprintf(out, out_len, "not available");
++    if (t < 1700000000) {              /* before Nov 2023 = not synced */
++        out[0] = '\0';
+         return;
+     }
+-
+-    h = (boot_time_str[11] - '0') * 10 + (boot_time_str[12] - '0');
+-    m = (boot_time_str[14] - '0') * 10 + (boot_time_str[15] - '0');
+-
+-    elapsed = (tui_millis() - boot_time_millis) / 60000UL;
+-    m += (int)(elapsed % 60);
+-    h += (int)(elapsed / 60);
+-    h %= 24;
+-    m %= 60;
+-
+-    snprintf(out, out_len, "%.10s %02d:%02d", boot_time_str, h, m);
++    localtime_r(&t, &tm);
++    snprintf(out, out_len, "%04d-%02d-%02d %02d:%02d",
++             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
++             tm.tm_hour, tm.tm_min);
+ }
++
+ static void wifi_setup_page(void)
+ {
+     char ssid[33];
+@@ -1364,7 +1397,7 @@
+         char now[32];
+         char line[80];
+         current_time_str(now, sizeof now);
+-        snprintf(line, sizeof line, "Network time: %s", now);
++        snprintf(line, sizeof line, "Network time: %s", now[0] ? now : "not available");
+         tui_puts(line);
+     }
+ 
+@@ -1487,9 +1520,21 @@
+                 save_current();
+             } else if (code == 64) {              /* F6: calendar */
+                 char path[64];
++                char now[32];
+                 clear_mark();
+-                if (calendar_show(boot_time_str, path, sizeof path)) {
+-                    load_file(path);
++                current_time_str(now, sizeof now);
++                if (calendar_show(now, path, sizeof path)) {
++                    if (!load_file(path)) {
++                        /* new diary day: start with an empty buffer so we
++                         * never save the previous document into this file */
++                        nlines = 1;
++                        lines[0][0] = '\0';
++                        modified = 0;
++                        top_line = left_col = 0;
++                        cur_line = cur_col = 0;
++                        clear_mark();
++                        spell_marks_off();
++                    }
+                     strncpy(filename, path, sizeof(filename) - 1);
+                     filename[sizeof(filename) - 1] = '\0';
+                 }
+@@ -1534,8 +1579,15 @@
+                 char path[260];
+                 path[0] = '\0';
+                 prompt_bar("Open: ");
+-                if (prompt_line("", path, sizeof path) >= 0 && path[0])
+-                    load_file(path);
++                if (prompt_line("", path, sizeof path) >= 0 && path[0]) {
++                    if (load_file(path)) {
++                        strncpy(filename, path, sizeof(filename) - 1);
++                        filename[sizeof(filename) - 1] = '\0';
++                    } else {
++                        status_msg("File not found");
++                        tui_getch();
++                    }
++                }
+                 tui_color(TUI_LGRAY, TUI_BLACK);
+             }
+             break;
+diff -ru /home/claude/orig/src/file_fabgl.cpp Fable-esp32-main/src/file_fabgl.cpp
+--- /home/claude/orig/src/file_fabgl.cpp	2026-11-02 08:22:37.547158414 +0000
++++ Fable-esp32-main/src/file_fabgl.cpp	2026-11-02 08:36:48.421384291 +0000
+@@ -12,17 +12,23 @@
+ 
+ static FabFile files[8];
+ 
++#define FAB_PATH_MAX 260
++
++/* SD paths must start with '/'. Writes the absolute form into out. */
++static void make_full(const char *path, char *out, size_t n)
++{
++    if (path[0] != '/') snprintf(out, n, "/%s", path);
++    else                snprintf(out, n, "%s", path);
++}
++
+ extern "C" {
+ 
+ FILE *fab_fopen(const char *path, const char *mode)
+ {
+     int i;
+-    char fullpath[64];
++    char fullpath[FAB_PATH_MAX];
+ 
+-    if (path[0] != '/')
+-        snprintf(fullpath, sizeof fullpath, "/%s", path);
+-    else
+-        snprintf(fullpath, sizeof fullpath, "%s", path);
++    make_full(path, fullpath, sizeof fullpath);
+ 
+     for (i = 0; i < 8; i++) {
+         if (!files[i].used) {
+@@ -81,8 +87,11 @@
+ int fab_fputs(const char *s, FILE *fp)
+ {
+     FabFile *f = (FabFile*)fp;
++    size_t n;
+     if (!f || !f->f) return EOF;
+-    return f->f.print(s) ? 0 : EOF;
++    n = strlen(s);
++    /* print() returns 0 for an empty string, which is not an error */
++    return f->f.write((const uint8_t*)s, n) == n ? 0 : EOF;
+ }
+ 
+ int fab_fclose(FILE *fp)
+@@ -96,10 +105,30 @@
+ 
+ int fab_remove(const char *path)
+ {
+-    return SD.remove(path) ? 0 : -1;
++    char fullpath[FAB_PATH_MAX];
++    make_full(path, fullpath, sizeof fullpath);
++    return SD.remove(fullpath) ? 0 : -1;
++}
++
++int fab_rename(const char *from, const char *to)
++{
++    char a[FAB_PATH_MAX], b[FAB_PATH_MAX];
++    make_full(from, a, sizeof a);
++    make_full(to,   b, sizeof b);
++    return SD.rename(a, b) ? 0 : -1;
+ }
+ 
+-int fab_ungetc(int c, FILE *fp) { (void)c; (void)fp; return EOF; }
++/* One-character push-back by stepping the file position back one byte.
++ * Valid because callers only unget the character they just read. */
++int fab_ungetc(int c, FILE *fp)
++{
++    FabFile *f = (FabFile*)fp;
++    size_t pos;
++    if (!f || !f->f || c == EOF) return EOF;
++    pos = f->f.position();
++    if (pos == 0) return EOF;
++    return f->f.seek(pos - 1) ? c : EOF;
++}
+ 
+ int fab_fseek(FILE *fp, long offset, int whence)
+ {
+@@ -120,14 +149,11 @@
+ 
+ int fab_list_dir(const char *path, char names[][32], int max)
+ {
+-    char fullpath[64];
++    char fullpath[FAB_PATH_MAX];
+     int n = 0;
+     File dir;
+ 
+-    if (path[0] != '/')
+-        snprintf(fullpath, sizeof fullpath, "/%s", path);
+-    else
+-        snprintf(fullpath, sizeof fullpath, "%s", path);
++    make_full(path, fullpath, sizeof fullpath);
+ 
+     dir = SD.open(fullpath);
+     if (!dir || !dir.isDirectory()) {
+diff -ru /home/claude/orig/src/file_fabgl.h Fable-esp32-main/src/file_fabgl.h
+--- /home/claude/orig/src/file_fabgl.h	2026-11-02 08:22:37.547655968 +0000
++++ Fable-esp32-main/src/file_fabgl.h	2026-11-02 08:36:48.420922560 +0000
+@@ -32,6 +32,9 @@
+ /* Directory listing routed through the same SD object as fab_fopen. */
+ int   fab_list_dir(const char *path, char names[][32], int max);
+ 
++/* Rename (replaces nothing: remove the destination first). 0 = ok. */
++int   fab_rename(const char *from, const char *to);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff -ru /home/claude/orig/src/main.cpp Fable-esp32-main/src/main.cpp
+--- /home/claude/orig/src/main.cpp	2026-11-02 08:22:37.548662249 +0000
++++ Fable-esp32-main/src/main.cpp	2026-11-02 08:23:24.487261213 +0000
+@@ -5,74 +5,92 @@
+ #include <esp_wifi.h>
+ #include <time.h>
+ #include <Preferences.h>
++#include <esp_heap_caps.h>
+ 
+ extern "C" int  fable_main(int argc, char **argv);
+ extern "C" int  tui_wifi_load(char *ssid, int ssid_len, char *pass, int pass_len);
+-extern "C" void set_boot_time(const char *s);
+ extern "C" void set_boot_wifi_ssid(const char *s);
+ 
+-static void fetch_time_at_boot(void)
+-{
+-    char ssid[33], pass[65];
+-
+-    if (!tui_wifi_load(ssid, sizeof ssid, pass, sizeof pass)) {
+-        Serial.println("Wi-Fi: no saved credentials");
+-        return;
+-    }
++/* POSIX timezone rule used for local time. Default = UK (GMT/BST).
++ * Examples: "UTC0"  "CET-1CEST,M3.5.0,M10.5.0/3"  "EST5EDT,M3.2.0,M11.1.0" */
++#define FABLE_TZ "GMT0BST,M3.5.0/1,M10.5.0"
++
++#define WIFI_TRIES        2
++#define WIFI_TIMEOUT_MS   12000
++#define NTP_TIMEOUT_MS    10000
+ 
+-    Serial.printf("Wi-Fi: loaded ssid='%s' pass_len=%d\n",
+-                  ssid, (int)strlen(pass));
++static void log_heap(const char *tag)
++{
++    Serial.printf("HEAP %-14s internal free=%u largest=%u\n", tag,
++                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++}
+ 
++static bool wifi_connect(const char *ssid, const char *pass)
++{
+     WiFi.persistent(false);
+     WiFi.mode(WIFI_STA);
+     WiFi.disconnect(true);
+     delay(200);
+-
+     WiFi.begin(ssid, pass);
+ 
+     unsigned long t0 = millis();
+     int last = -1;
+-    while (millis() - t0 < 8000) {
++    while (millis() - t0 < WIFI_TIMEOUT_MS) {
+         int s = WiFi.status();
+         if (s != last) {
+             Serial.printf("Wi-Fi: t=%lums status=%d\n", millis() - t0, s);
+             last = s;
+         }
+-        if (s == WL_CONNECTED) break;
++        if (s == WL_CONNECTED) return true;
+         delay(100);
+     }
++    Serial.printf("Wi-Fi: connect failed (final status=%d)\n", WiFi.status());
++    return false;
++}
+ 
+-    if (WiFi.status() != WL_CONNECTED) {
+-        Serial.printf("Wi-Fi: connect failed (final status=%d)\n", WiFi.status());
+-        WiFi.mode(WIFI_OFF);
++/* Connects, syncs the system clock over NTP, then shuts Wi-Fi down.
++ * The ESP32 system clock keeps running afterwards, so the editor just
++ * reads time() - no boot string, no millis arithmetic. */
++static void fetch_time_at_boot(void)
++{
++    char ssid[33], pass[65];
++
++    if (!tui_wifi_load(ssid, sizeof ssid, pass, sizeof pass)) {
++        Serial.println("Wi-Fi: no saved credentials");
+         return;
+     }
++    Serial.printf("Wi-Fi: loaded ssid='%s' pass_len=%d\n",
++                  ssid, (int)strlen(pass));
+ 
+-    Serial.printf("Wi-Fi: connected, IP=%s\n",
+-                  WiFi.localIP().toString().c_str());
+-    set_boot_wifi_ssid(ssid);
+-
+-    configTime(0, 0, "pool.ntp.org");
+-
+-    struct tm tm;
+-    if (getLocalTime(&tm, 5000)) {
+-        char buf[32];
+-        snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d",
+-                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+-                 tm.tm_hour, tm.tm_min);
+-        set_boot_time(buf);
+-        Serial.printf("Wi-Fi: NTP time = %s\n", buf);
+-    } else {
+-        Serial.println("Wi-Fi: NTP fetch failed");
++    bool synced = false;
++    for (int attempt = 1; attempt <= WIFI_TRIES && !synced; attempt++) {
++        Serial.printf("Wi-Fi: attempt %d/%d\n", attempt, WIFI_TRIES);
++        if (!wifi_connect(ssid, pass)) continue;
++
++        Serial.printf("Wi-Fi: connected, IP=%s\n",
++                      WiFi.localIP().toString().c_str());
++        set_boot_wifi_ssid(ssid);
++
++        configTzTime(FABLE_TZ, "pool.ntp.org", "time.google.com");
++
++        struct tm tm;
++        if (getLocalTime(&tm, NTP_TIMEOUT_MS)) {
++            Serial.printf("Wi-Fi: NTP time = %04d-%02d-%02d %02d:%02d\n",
++                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
++                          tm.tm_hour, tm.tm_min);
++            synced = true;
++        } else {
++            Serial.println("Wi-Fi: NTP fetch failed");
++        }
+     }
+ 
++    /* Arduino's WiFi.mode(WIFI_OFF) already stops and deinitialises the
++     * driver; calling esp_wifi_stop()/esp_wifi_deinit() again is redundant. */
+     WiFi.disconnect(true);
+     WiFi.mode(WIFI_OFF);
+-    esp_wifi_stop();
+-    esp_wifi_deinit();
+-    delay(500);
++    delay(200);
+     Serial.println("Wi-Fi: shut down, starting VGA");
+-    
+ }
+ 
+ void setup() {
+@@ -87,16 +105,20 @@
+     }
+ 
+     /* Wi-Fi connect + NTP BEFORE VGA (frees RAM before framebuffer alloc) */
++    log_heap("before wifi");
+     fetch_time_at_boot();
++    log_heap("after wifi");
+ 
+     /* SD card */
+     SPI.begin(14, 2, 12, 13);
+     if (SD.begin(13)) {
+         Serial.println("SD mounted");
++        if (!SD.exists("/diary")) SD.mkdir("/diary");   /* calendar saves here */
+     } else {
+         Serial.println("SD mount failed");
+     }
+ 
++    log_heap("before vga");
+     char *argv[] = { (char*)"fable", nullptr };
+     fable_main(1, argv);
+ }
+diff -ru /home/claude/orig/src/tui.h Fable-esp32-main/src/tui.h
+--- /home/claude/orig/src/tui.h	2026-11-02 08:22:37.550668570 +0000
++++ Fable-esp32-main/src/tui.h	2026-11-02 08:23:27.799396620 +0000
+@@ -50,7 +50,6 @@
+ void tui_cursor(int visible, int block); /* block=1 solid, block=0 underline */
+ void tui_boot_colors(int delay_ms);
+ /* wifi */
+-void set_boot_time(const char *s);
+ void set_boot_wifi_ssid(const char *s);
+ 
+ int tui_wifi_scan(char names[][33], int max);
+diff -ru /home/claude/orig/src/tui_fabgl.cpp Fable-esp32-main/src/tui_fabgl.cpp
+--- /home/claude/orig/src/tui_fabgl.cpp	2026-11-02 08:22:37.551098201 +0000
++++ Fable-esp32-main/src/tui_fabgl.cpp	2026-11-02 08:23:24.487576723 +0000
+@@ -7,6 +7,7 @@
+ #include <string.h>
+ #include <WiFi.h>
+ #include <Preferences.h>
++#include <esp_heap_caps.h>
+ 
+ static fabgl::VGA16Controller VGAController;   /* was fabgl::VGAController */
+ //static fabgl::VGAController       VGAController;
+@@ -195,8 +196,14 @@
+     PS2Controller.begin(GPIO_NUM_33, GPIO_NUM_32, GPIO_NUM_26, GPIO_NUM_27);
+     Keyboard.begin(true, true, 0);
+ 
++    Serial.printf("HEAP before VGA   internal free=%u largest=%u\n",
++                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+     VGAController.begin();
+     VGAController.setResolution(VGA_640x480_60Hz);
++    Serial.printf("HEAP after VGA    internal free=%u largest=%u\n",
++                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
++                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+ 
+     Terminal.begin(&VGAController);
+     Terminal.loadFont(&fabgl::FONT_8x8);
+--- /home/claude/orig/platformio.ini	2026-11-02 08:22:37.545065554 +0000
++++ Fable-esp32-main/platformio.ini	2026-11-02 08:23:24.487802370 +0000
+@@ -8,8 +8,6 @@
+ build_flags =
+     -DBOARD_HAS_PSRAM
+     -DFABLE_ESP32
+-    -DBOARD_HAS_PSRAM
+-    -DFABLE_ESP32
+ lib_deps =
+     fabgl
+ 

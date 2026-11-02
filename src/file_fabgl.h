@@ -32,6 +32,9 @@ long  fab_ftell(FILE *fp);
 /* Directory listing routed through the same SD object as fab_fopen. */
 int   fab_list_dir(const char *path, char names[][32], int max);
 
+/* Rename (replaces nothing: remove the destination first). 0 = ok. */
+int   fab_rename(const char *from, const char *to);
+
 #ifdef __cplusplus
 }
 #endif
