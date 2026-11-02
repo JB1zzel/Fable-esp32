@@ -165,3 +165,14 @@ This project uses \[PlatformIO](https://platformio.org/).
 pio run -t upload
 
 
+
+### Post-clone step
+
+After the first `pio run`, edit:
+
+    .pio/libdeps/ttgo-vga32/FabGL/src/fabglconf.h
+
+Change `FABGLIB_MINFREELARGESTBLOCK` from `40000` to `20000`.
+Without this the VGA viewport allocates at 640×444 or smaller
+and the editor loses rows. Lost on `pio run -t clean`.
+
