@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include "tui.h"
 #include "file_fabgl.h"
+#include "fable.h"
 
 #define CAL_COLS    7
 #define CAL_CELL_W  4
@@ -142,7 +143,7 @@ static unsigned long scan_entries(int year, int month)
     char path[32];
 
     for (d = 1; d <= dim; d++) {
-        snprintf(path, sizeof path, "/diary/%04d-%02d-%02d.txt", year, month, d);
+        diary_path(path, sizeof path, year, month, d);
         if (fab_exists(path)) mask |= 1UL << (d - 1);
     }
     return mask;
@@ -207,8 +208,7 @@ int calendar_show(const char *now, char *out_path, int out_len)
         c = tui_getch();
         if (c == 27) return 0;                       /* Esc */
         if (c == 13) {                               /* Enter */
-            snprintf(out_path, out_len, "/diary/%04d-%02d-%02d.txt",
-                     year, month, sel);
+            diary_path(out_path, out_len, year, month, sel);
             return 1;
         }
         if (c == 0 || c == 224) {

@@ -41,24 +41,11 @@
 #include "file_fabgl.h"
 #include "esp_heap_caps.h"
 
-#define MAXLINES 256
-#define MAXLINE  1024
-#define SCRW     80
-#define SCRH 55  /* 59 text rows + 1 status row = 60 total */
-//#define SCRH     28
+#include "fable.h"
 
-
-static char          boot_wifi_ssid[33] = "";
-
-void set_boot_wifi_ssid(const char *s)
-{
-    strncpy(boot_wifi_ssid, s, sizeof(boot_wifi_ssid) - 1);
-    boot_wifi_ssid[sizeof(boot_wifi_ssid) - 1] = '\0';
-}
 
 #define IS_WORD(c) (isalnum((unsigned char)(c)) || (c) == '_')
 static char (*lines)[MAXLINE] = NULL;
-int calendar_show(const char *now, char *out_path, int out_len);
 static int change_counter = 0;
 static int cached_words = 0;
 static int cached_words_counter = -1;
@@ -565,64 +552,6 @@ static void reflow(int width)
     spell_marks_off();
 }
 
-static void help_screen(void)
-{
-    tui_clear();
-    tui_color(TUI_WHITE, TUI_BLACK);
-
-    tui_gotoxy(1, 1);
-    tui_puts("FABLE - Jamie Bradbury 2026");
-    tui_gotoxy(1, 3);
-    tui_puts("  Arrows        move cursor");
-    tui_gotoxy(1, 4);
-    tui_puts("  Shift+Arrows  word left / right");
-    tui_gotoxy(1, 5);
-    tui_puts("  Home / End    line start / end");
-    tui_gotoxy(1, 6);
-    tui_puts("  PgUp / PgDn   page up / down");
-    tui_gotoxy(1, 8);
-    tui_puts("  Enter         split line");
-    tui_gotoxy(1, 9);
-    tui_puts("  Backspace     delete char / merge up");
-    tui_gotoxy(1, 10);
-    tui_puts("  Delete        delete char / merge down");
-    tui_gotoxy(1, 12);
-    tui_puts("  F1            this help");
-    tui_gotoxy(1, 13);
-    tui_puts("  F2            reflow paragraph");
-    tui_gotoxy(1, 14);
-    tui_puts("  F3 / Ctrl+S   save");
-    tui_gotoxy(1, 15);
-    tui_puts("  F4            spellcheck");
-    tui_gotoxy(1, 16);
-    tui_puts("  F5            highlight spelling in document");
-    tui_gotoxy(1, 18); 
-    tui_puts("  Ctrl+F        find");
-    tui_gotoxy(1, 19);
-    tui_puts("  Ctrl+R        find & replace");
-    tui_gotoxy(1, 20);
-    tui_puts("  Ctrl+B/X/P    mark / cut / paste");
-    tui_gotoxy(1, 21);
-    tui_puts("  Ctrl+N/O      new file / Open");
-    tui_gotoxy(1, 22);
-   /* tui_puts("  Ctrl+D        diary");*/
-    tui_gotoxy(1, 23);
-    tui_puts("  Esc           quit (prompts if modified)");
-
-    tui_gotoxy(1, SCRH + 1);
-    tui_color(TUI_BLACK, TUI_LGRAY);
-    {
-        char buf[SCRW + 1];
-        int i;
-        snprintf(buf, sizeof buf, " F1 HELP  F2 REFLOW  F3 SAVE  ESC EXIT");
-        for (i = (int)strlen(buf); i < SCRW; i++) buf[i] = ' ';
-        buf[SCRW] = '\0';
-        tui_puts(buf);
-    }
-    tui_color(TUI_LGRAY, TUI_BLACK);
-
-    tui_getch();          /* any key returns */
-}
 /* ---------- file io ---------- */
 
 static void status_msg(const char *msg);
@@ -1111,54 +1040,6 @@ static void move_arrow(int code)
     }
 }
 
-static int prompt_line(const char *prompt, char *dest, int maxlen)
-{
-    int len = 0, c;
-    tui_puts(prompt);
-    for (;;) {
-        c = tui_getch();
-        if (c == 0 || c == 224) { tui_getch(); continue; }
-        if (c == 13) break;
-        if (c == 8) {
-            if (len > 0) { len--; tui_putc('\b'); tui_putc(' '); tui_putc('\b'); }
-            continue;
-        }
-        if (c == 27) { dest[0] = '\0'; return -1; }
-        if (c >= 32 && c < 127 && len < maxlen - 1) {
-            dest[len++] = (char)c;
-            tui_putc(c);
-        }
-    }
-    dest[len] = '\0';
-    return 0;
-}
-
-static int prompt_line_edit(char *dest, int initial_len, int maxlen)
-{
-    int len = initial_len, c;
-    tui_puts(dest);
-    for (;;) {
-        c = tui_getch();
-        if (c == 0 || c == 224) { tui_getch(); continue; }
-        if (c == 13) break;
-        if (c == 8) {
-            if (len > 0) {
-                len--;
-                tui_putc('\b');
-                tui_putc(' ');
-                tui_putc('\b');
-            }
-            continue;
-        }
-        if (c == 27) { dest[0] = '\0'; return -1; }
-        if (c >= 32 && c < 127 && len < maxlen - 1) {
-            dest[len++] = (char)c;
-            tui_putc(c);
-        }
-    }
-    dest[len] = '\0';
-    return 0;
-}
 /* ---------- save with name prompt (if untitled) ---------- */
 
 static int save_current(void)
@@ -1167,42 +1048,13 @@ static int save_current(void)
         char path[260];
         prompt_bar("Save as: ");
         path[0] = '\0';
-        prompt_line("", path, sizeof path);
+        fb_prompt_line("", path, sizeof path);
         tui_color(TUI_LGRAY, TUI_BLACK);
         if (!path[0]) return 0;
         strncpy(filename, path, sizeof(filename) - 1);
         filename[sizeof(filename) - 1] = '\0';
     }
     return save_file();
-}
-
-#define MAXFILES 64
-
-static void show_files(void)
-{
-    char (*names)[32] = (char (*)[32])malloc((size_t)MAXFILES * 32);   /* was: static char names[MAXFILES][32]; */
-    int n, i;
-
-    if (!names) return;
-    n = tui_list_dir("/", names, MAXFILES);
-
-    tui_clear();
-    tui_color(TUI_WHITE, TUI_BLACK);
-    tui_gotoxy(1, 1);
-    tui_puts("Files on drive:");
-
-    if (n == 0) {
-        tui_gotoxy(1, 3);
-        tui_puts("(none found)");
-    }
-    for (i = 0; i < n; i++) {
-        char cell[26];
-        snprintf(cell, sizeof cell, "%.25s", names[i]);
-        tui_gotoxy((i / 22) * 26 + 1, (i % 22) + 3);
-        tui_puts(cell);
-    }
-    tui_color(TUI_LGRAY, TUI_BLACK);
-    free(names);                                                        /* NEW */
 }
 
 /* ---------- Ctrl+N: new named document ---------- */
@@ -1226,10 +1078,10 @@ static void new_document(void)
     }
 
    
-    show_files();
+    fb_show_files();
     prompt_bar("New/open file: ");
     path[0] = '\0';
-    prompt_line("", path, sizeof path);
+    fb_prompt_line("", path, sizeof path);
     tui_color(TUI_LGRAY, TUI_BLACK);
     if (!path[0]) return;
 
@@ -1344,114 +1196,6 @@ static void spell_check(void)
     left_col = 0;
     spell_marks_off(); 
 }
-/* Reads the ESP32 system clock (set by NTP at boot, keeps running after
- * Wi-Fi is switched off). Writes "YYYY-MM-DD HH:MM" local time, or an
- * empty string if the clock has never been synced. */
-static void current_time_str(char *out, int out_len)
-{
-    time_t t = time(NULL);
-    struct tm tm;
-
-    if (t < 1700000000) {              /* before Nov 2023 = not synced */
-        out[0] = '\0';
-        return;
-    }
-    localtime_r(&t, &tm);
-    snprintf(out, out_len, "%04d-%02d-%02d %02d:%02d",
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min);
-}
-
-static void wifi_setup_page(void)
-{
-    char ssid[33];
-    char pass[65];
-    int have;
-    int connected;
-
-    have = tui_wifi_load(ssid, sizeof ssid, pass, sizeof pass);
-    connected = (boot_wifi_ssid[0] != '\0');
-
-    tui_clear();
-    tui_color(TUI_WHITE, TUI_BLACK);
-    tui_gotoxy(1, 1);
-    tui_puts("Wi-Fi Setup");
-
-    tui_gotoxy(1, 3);
-    if (connected) {
-        char line[80];
-        tui_color(TUI_LGREEN, TUI_BLACK);
-        snprintf(line, sizeof line, "Connected to: %s", boot_wifi_ssid);
-        tui_puts(line);
-        tui_color(TUI_WHITE, TUI_BLACK);
-    } else if (have) {
-        char line[80];
-        tui_color(TUI_LRED, TUI_BLACK);
-        snprintf(line, sizeof line, "Saved SSID: %s (not connected)", ssid);
-        tui_puts(line);
-        tui_color(TUI_WHITE, TUI_BLACK);
-    } else {
-        tui_puts("No network saved yet.");
-    }
-
-    tui_gotoxy(1, 5);
-    {
-        char now[32];
-        char line[80];
-        current_time_str(now, sizeof now);
-        snprintf(line, sizeof line, "Network time: %s", now[0] ? now : "not available");
-        tui_puts(line);
-    }
-
-    tui_gotoxy(1, 7);
-    tui_puts("Type new credentials to replace them,");
-    tui_gotoxy(1, 8);
-    tui_puts("or press Enter alone to keep current.");
-
-    tui_gotoxy(1, 10);
-    tui_puts("SSID: ");
-    ssid[0] = '\0';
-    if (prompt_line("", ssid, sizeof ssid) < 0) {
-        tui_color(TUI_LGRAY, TUI_BLACK);
-        tui_clear();
-        return;
-    }
-    if (!ssid[0]) {
-        tui_color(TUI_LGRAY, TUI_BLACK);
-        tui_clear();
-        return;
-    }
-
-    tui_gotoxy(1, 12);
-    tui_puts("Password: ");
-    pass[0] = '\0';
-    if (prompt_line("", pass, sizeof pass) < 0) {
-        tui_color(TUI_LGRAY, TUI_BLACK);
-        tui_clear();
-        return;
-    }
-
-    if (tui_wifi_save(ssid, pass)) {
-        tui_clear();
-        tui_color(TUI_WHITE, TUI_BLACK);
-        tui_gotoxy(1, 1);
-        tui_puts("Wi-Fi credentials saved.");
-        tui_gotoxy(1, 3);
-        tui_puts("Connects on next boot.");
-        tui_gotoxy(1, 5);
-        tui_puts("Press a key to return to the editor.");
-        tui_getch();
-    } else {
-        tui_clear();
-        tui_color(TUI_WHITE, TUI_RED);
-        tui_gotoxy(1, 1);
-        tui_puts("Failed to save credentials.");
-        tui_getch();
-    }
-    tui_color(TUI_LGRAY, TUI_BLACK);
-    tui_clear();
-}
-
 /* ---------- main ---------- */
 
 int fable_main(int argc, char **argv)
@@ -1483,7 +1227,7 @@ int fable_main(int argc, char **argv)
         char path[260];
         path[0] = '\0';
         prompt_bar("Dictionary not found. Path [skip]: ");
-        if (prompt_line("", path, sizeof path) >= 0 && path[0]) {
+        if (fb_prompt_line("", path, sizeof path) >= 0 && path[0]) {
             strncpy(dict_path, path, sizeof(dict_path) - 1);
             dict_path[sizeof(dict_path) - 1] = '\0';
             if (ts_init(dict_path)) spell_ok = 1;
@@ -1501,13 +1245,13 @@ int fable_main(int argc, char **argv)
             int code = tui_getch();
             if (code == 59) {          /* F1 */
                 clear_mark();
-                help_screen();
+                fb_help_screen();
             } else if (code == 60) {                     /* F2: reflow */
                 char buf[16];
                 int width = 80;
                 buf[0] = '\0';
                 prompt_bar("Width [80]: ");
-                if (prompt_line("", buf, sizeof buf) < 0) {
+                if (fb_prompt_line("", buf, sizeof buf) < 0) {
                     tui_color(TUI_LGRAY, TUI_BLACK);
                     continue;                            /* Esc cancels */
                 }
@@ -1522,10 +1266,8 @@ int fable_main(int argc, char **argv)
                 save_current();
             } else if (code == 64) {              /* F6: calendar */
                 char path[64];
-                char now[32];
                 clear_mark();
-                current_time_str(now, sizeof now);
-                if (calendar_show(now, path, sizeof path)) {
+                if (diary_pick(path, sizeof path)) {
                     if (!load_file(path)) {
                         /* new diary day: start with an empty buffer so we
                          * never save the previous document into this file */
@@ -1542,7 +1284,7 @@ int fable_main(int argc, char **argv)
                 }
             } else if (code == 67) {              /* F9: Wi-Fi setup */
                clear_mark();
-               wifi_setup_page();
+               fb_wifi_setup_page();
             } else if (code == 62) {              /* F4 */
                 spell_check();
             } else if (code == 63) {              /* F5: toggle spell marks */
@@ -1581,7 +1323,7 @@ int fable_main(int argc, char **argv)
                 char path[260];
                 path[0] = '\0';
                 prompt_bar("Open: ");
-                if (prompt_line("", path, sizeof path) >= 0 && path[0]) {
+                if (fb_prompt_line("", path, sizeof path) >= 0 && path[0]) {
                     if (load_file(path)) {
                         strncpy(filename, path, sizeof(filename) - 1);
                         filename[sizeof(filename) - 1] = '\0';
@@ -1626,7 +1368,7 @@ int fable_main(int argc, char **argv)
                 char needle[128];
                 needle[0] = '\0';
                 prompt_bar("Find: ");
-                prompt_line("", needle, sizeof needle);
+                fb_prompt_line("", needle, sizeof needle);
                 tui_color(TUI_LGRAY, TUI_BLACK);
                 if (needle[0] && !find_next(needle)) {
                     prompt_bar("Not found - press a key");
@@ -1664,20 +1406,20 @@ int fable_main(int argc, char **argv)
 
                 prompt_bar("Find: ");
                 if (find_buf[0]) {
-                    if (prompt_line_edit(find_buf, (int)strlen(find_buf),
+                    if (fb_prompt_line_edit(find_buf, (int)strlen(find_buf),
                                         sizeof find_buf) < 0) {
                         tui_color(TUI_LGRAY, TUI_BLACK);
                         break;
                     }
                 } else {
-                    prompt_line("", find_buf, sizeof find_buf);
+                    fb_prompt_line("", find_buf, sizeof find_buf);
                 }
                 tui_color(TUI_LGRAY, TUI_BLACK);
                 if (!find_buf[0]) break;
 
                 replace_buf[0] = '\0';
                 prompt_bar("Replace with: ");
-                prompt_line("", replace_buf, sizeof replace_buf);
+                fb_prompt_line("", replace_buf, sizeof replace_buf);
                 tui_color(TUI_LGRAY, TUI_BLACK);
 
                 spec.needle = find_buf;
