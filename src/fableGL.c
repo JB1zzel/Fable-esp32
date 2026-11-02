@@ -1078,12 +1078,7 @@ static void new_document(void)
     }
 
    
-    fb_show_files();
-    prompt_bar("New/open file: ");
-    path[0] = '\0';
-    fb_prompt_line("", path, sizeof path);
-    tui_color(TUI_LGRAY, TUI_BLACK);
-    if (!path[0]) return;
+    if (!fb_show_files(path, sizeof path)) return;
 
     nlines = 1;
     lines[0][0] = '\0';

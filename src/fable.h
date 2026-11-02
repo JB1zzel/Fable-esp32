@@ -19,9 +19,10 @@ int  fb_prompt_line_edit(char *dest, int initial_len, int maxlen);
 /* help.c */
 void fb_help_screen(void);
 
-/* filer.c - lists the files on the SD card */
-void fb_show_files(void);
-
+/* filer.c - interactive file picker.
+ * Returns 1 and fills out_path with the chosen file's path.
+ * Returns 0 on Esc. */
+int  fb_show_files(char *out_path, int out_len);
 /* clock.c */
 void fb_current_time_str(char *out, int out_len);   /* "YYYY-MM-DD HH:MM" or "" */
 void fb_wifi_setup_page(void);

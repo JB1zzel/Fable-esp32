@@ -9,6 +9,7 @@
 #define FILE_FABGL_H
 
 #include <stdio.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +38,24 @@ int   fab_rename(const char *from, const char *to);
 
 /* 1 if the path exists (no error is logged when it does not). */
 int   fab_exists(const char *path);
+
+/* ---- structured directory listing for the Filer ---- */
+
+typedef struct {
+    char     name[64];
+    uint32_t size;       /* file size in bytes (0 for dirs) */
+    uint32_t mtime;      /* unix epoch seconds, 0 if unknown */
+    int      is_dir;
+} FabDirEntry;
+
+/* Card size / used bytes. Returns 0 on failure. */
+uint64_t fab_card_total(void);
+uint64_t fab_card_used(void);
+/* Fills out[] with up to max entries of the given directory.
+ * Entries are sorted: directories first (alphabetical), then files
+ * by mtime descending. ".." is NOT included - caller synthesizes it.
+ * Returns count (>= 0). */
+int   fab_dir_entries(const char *path, FabDirEntry *out, int max);
 
 #ifdef __cplusplus
 }

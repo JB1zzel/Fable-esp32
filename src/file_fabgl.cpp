@@ -4,6 +4,8 @@
 #include <SD.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include "file_fabgl.h"
 
 typedef struct {
     File f;
@@ -90,7 +92,6 @@ int fab_fputs(const char *s, FILE *fp)
     size_t n;
     if (!f || !f->f) return EOF;
     n = strlen(s);
-    /* print() returns 0 for an empty string, which is not an error */
     return f->f.write((const uint8_t*)s, n) == n ? 0 : EOF;
 }
 
@@ -123,6 +124,16 @@ int fab_rename(const char *from, const char *to)
     make_full(from, a, sizeof a);
     make_full(to,   b, sizeof b);
     return SD.rename(a, b) ? 0 : -1;
+}
+
+uint64_t fab_card_total(void)
+{
+    return (uint64_t)SD.cardSize();
+}
+
+uint64_t fab_card_used(void)
+{
+    return (uint64_t)SD.usedBytes();
 }
 
 /* One-character push-back by stepping the file position back one byte.
@@ -163,6 +174,10 @@ int fab_list_dir(const char *path, char names[][32], int max)
     make_full(path, fullpath, sizeof fullpath);
 
     dir = SD.open(fullpath);
+    Serial.printf("fab_dir_entries: '%s' opened=%d isdir=%d\n",
+              fullpath,
+              dir ? 1 : 0,
+              (dir && dir.isDirectory()) ? 1 : 0);
     if (!dir || !dir.isDirectory()) {
         if (dir) dir.close();
         return 0;
@@ -182,6 +197,83 @@ int fab_list_dir(const char *path, char names[][32], int max)
         e = dir.openNextFile();
     }
     dir.close();
+    return n;
+}
+
+/* Case-insensitive strcmp helper for sorting names. */
+static int name_cmp(const char *a, const char *b)
+{
+    while (*a && *b) {
+        int ca = (unsigned char)*a++;
+        int cb = (unsigned char)*b++;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return ca - cb;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+/* qsort comparator: directories first (alphabetical), then files by
+ * mtime descending, ties broken alphabetically. */
+static int cmp_dir_entry(const void *pa, const void *pb)
+{
+    const FabDirEntry *a = (const FabDirEntry *)pa;
+    const FabDirEntry *b = (const FabDirEntry *)pb;
+
+    if (a->is_dir && !b->is_dir) return -1;
+    if (!a->is_dir && b->is_dir) return  1;
+    if (a->is_dir)               return name_cmp(a->name, b->name);
+
+    if (a->mtime > b->mtime) return -1;
+    if (a->mtime < b->mtime) return  1;
+    return name_cmp(a->name, b->name);
+}
+
+int fab_dir_entries(const char *path, FabDirEntry *out, int max)
+{
+    char fullpath[FAB_PATH_MAX];
+    int n = 0;
+    File dir;
+
+    if (!out || max <= 0) return 0;
+    make_full(path, fullpath, sizeof fullpath);
+
+    /* SD.open() fails on directory paths with a trailing slash — strip it */
+    {
+        size_t len = strlen(fullpath);
+        if (len > 1 && fullpath[len - 1] == '/') fullpath[len - 1] = '\0';
+    }
+
+    dir = SD.open(fullpath);
+    if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return 0;
+    }
+
+    File e = dir.openNextFile();
+    while (e && n < max) {
+        const char *nm = e.name();
+        const char *slash = strrchr(nm, '/');
+        if (slash) nm = slash + 1;
+
+        if (strcmp(nm, ".") != 0 && strcmp(nm, "..") != 0) {
+            strncpy(out[n].name, nm, sizeof(out[n].name) - 1);
+            out[n].name[sizeof(out[n].name) - 1] = '\0';
+            out[n].is_dir = e.isDirectory() ? 1 : 0;
+            out[n].size   = out[n].is_dir ? 0 : (uint32_t)e.size();
+            out[n].mtime  = 0;
+            if (!out[n].is_dir) {
+                time_t t = e.getLastWrite();
+                out[n].mtime = (uint32_t)t;
+            }
+            n++;
+        }
+        e.close();
+        e = dir.openNextFile();
+    }
+    dir.close();
+
+    if (n > 1) qsort(out, (size_t)n, sizeof(FabDirEntry), cmp_dir_entry);
     return n;
 }
 
