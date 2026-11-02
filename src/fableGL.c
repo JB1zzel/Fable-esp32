@@ -66,7 +66,7 @@ void set_boot_wifi_ssid(const char *s)
 
 #define IS_WORD(c) (isalnum((unsigned char)(c)) || (c) == '_')
 static char (*lines)[MAXLINE] = NULL;
-
+int calendar_show(const char *boot_time, char *out_path, int out_len);
 static int change_counter = 0;
 static int cached_words = 0;
 static int cached_words_counter = -1;
@@ -1485,6 +1485,14 @@ int fable_main(int argc, char **argv)
             } else if (code == 61) {              /* F3 */
                 clear_mark();
                 save_current();
+            } else if (code == 64) {              /* F6: calendar */
+                char path[64];
+                clear_mark();
+                if (calendar_show(boot_time_str, path, sizeof path)) {
+                    load_file(path);
+                    strncpy(filename, path, sizeof(filename) - 1);
+                    filename[sizeof(filename) - 1] = '\0';
+                }
             } else if (code == 67) {              /* F9: Wi-Fi setup */
                clear_mark();
                wifi_setup_page();
