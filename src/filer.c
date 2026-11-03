@@ -8,9 +8,13 @@
 #include "file_fabgl.h"
 #include "fable.h"
 
-#define MAX_ENTRIES  96
+#ifdef FABLE_ESP32
+#include "esp_heap_caps.h"
+#endif
+
+#define MAX_ENTRIES  512
 #define LIST_TOP     4
-#define LIST_BOTTOM  51
+#define LIST_BOTTOM  (SCRH - 4)         /* 51 when SCRH is 55 */
 #define VISIBLE_ROWS (LIST_BOTTOM - LIST_TOP + 1)
 
 #define MARK_ROOT    '.'
@@ -31,9 +35,56 @@ typedef struct {
     char        path[260];
     FabDirEntry entries[MAX_ENTRIES];
     int         count;
+    int         more;           /* 1 = folder has entries beyond MAX_ENTRIES */
     int         cursor;
     int         scroll;
+    uint64_t    card_total;     /* cached: SD.usedBytes() walks the FAT, */
+    uint64_t    card_used;      /* so it is read once, not on every redraw */
 } FilerState;
+
+/* Big buffers go to PSRAM when there is some: internal RAM is needed by
+ * the VGA driver. free() releases either kind. */
+static void *big_alloc(size_t n)
+{
+    void *p = NULL;
+#ifdef FABLE_ESP32
+    p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+#endif
+    if (!p) p = malloc(n);
+    return p;
+}
+
+static void filer_card_refresh(FilerState *s)
+{
+    s->card_total = fab_card_total();
+    s->card_used  = fab_card_used();
+}
+
+/* FAT does not allow these in names; also keeps names inside the list. */
+static int name_ok(const char *n)
+{
+    const char *bad = "\\/:*?\"<>|";
+    size_t i;
+    if (!n[0] || strcmp(n, ".") == 0 || strcmp(n, "..") == 0) return 0;
+    if (strlen(n) > 100) return 0;
+    for (i = 0; n[i]; i++)
+        if (strchr(bad, n[i]) || (unsigned char)n[i] < 32) return 0;
+    return 1;
+}
+
+/* case-insensitive match against the listed entries (FAT ignores case) */
+static int name_in_use(const FilerState *s, const char *n, int dirs_only)
+{
+    int i;
+    for (i = 0; i < s->count; i++) {
+        const char *a = s->entries[i].name;
+        if (dirs_only && !s->entries[i].is_dir) continue;
+        const char *b = n;
+        while (*a && *b && ((*a | 32) == (*b | 32))) { a++; b++; }
+        if (!*a && !*b) return 1;
+    }
+    return 0;
+}
 
 /* path helpers */
 static void filer_descend(FilerState *s, const char *name)
@@ -56,7 +107,7 @@ static void filer_go_up(FilerState *s)
 
 static void filer_rescan(FilerState *s)
 {
-    s->count = fab_dir_entries(s->path, s->entries, MAX_ENTRIES);
+    s->count = fab_dir_entries(s->path, s->entries, MAX_ENTRIES, &s->more);
     if (s->cursor >= s->count) s->cursor = s->count > 0 ? s->count - 1 : 0;
     if (s->cursor < 0) s->cursor = 0;
     if (s->scroll > s->cursor) s->scroll = s->cursor;
@@ -145,23 +196,30 @@ static void draw_entry(FilerState *s, int idx, int row)
     tui_gotoxy(2, row);
     for (i = 0; i < SCRW - 2; i++) tui_putc(' ');
 
-    if (e->is_dir) {
-        tui_gotoxy(3, row);
-        if (selected) tui_color(TUI_BLACK, TUI_LGRAY);
-        tui_putc(MARK_DIR);
-        tui_putc(' ');
-        tui_puts(e->name);
-        name_len = (int)strlen(e->name) + 2;
-    } else {
-        tui_gotoxy(5, row);
-        if (selected) tui_color(TUI_BLACK, TUI_LGRAY);
-        tui_puts(e->name);
-        name_len = (int)strlen(e->name) + 4;
-    }
-
     fmt_size(sz, sizeof sz, e->size);
     {
-        int sz_col = SCRW - 3 - (int)strlen(sz);
+        /* longest name that still leaves room for the size column */
+        int sz_col  = SCRW - 3 - (int)strlen(sz);
+        int name_max = sz_col - 6;
+        char shown[SCRW];
+        if (name_max > (int)sizeof shown - 1) name_max = (int)sizeof shown - 1;
+        if (name_max < 1) name_max = 1;
+        snprintf(shown, sizeof shown, "%.*s", name_max, e->name);
+
+        if (e->is_dir) {
+            tui_gotoxy(3, row);
+            if (selected) tui_color(TUI_BLACK, TUI_LGRAY);
+            tui_putc(MARK_DIR);
+            tui_putc(' ');
+            tui_puts(shown);
+            name_len = (int)strlen(shown) + 2;
+        } else {
+            tui_gotoxy(5, row);
+            if (selected) tui_color(TUI_BLACK, TUI_LGRAY);
+            tui_puts(shown);
+            name_len = (int)strlen(shown) + 4;
+        }
+
         if (sz_col > 2 + name_len) {
             tui_gotoxy(sz_col, row);
             if (selected) tui_color(TUI_BLACK, TUI_LGRAY);
@@ -257,13 +315,17 @@ static void filer_draw(FilerState *s)
                 snprintf(total_str, sizeof total_str, "%lu.%luM",
                          (unsigned long)(total / (1024ULL * 1024ULL)),
                          (unsigned long)((total * 10 / (1024ULL * 1024ULL)) % 10));
-            else
+            else if (total >= 1024ULL)
                 snprintf(total_str, sizeof total_str, "%luK",
                          (unsigned long)(total / 1024));
-            snprintf(line, sizeof line, " %d file%s, %d dir%s, %s total",
+            else
+                snprintf(total_str, sizeof total_str, "%luB",
+                         (unsigned long)total);
+            snprintf(line, sizeof line, " %d file%s, %d dir%s, %s total%s",
                      nfiles, nfiles == 1 ? "" : "s",
                      ndirs,  ndirs == 1 ? "" : "s",
-                     total_str);
+                     total_str,
+                     s->more ? "  (list cut off)" : "");
         }
         tui_color(TUI_WHITE, TUI_BLACK);
         tui_gotoxy(1, LIST_BOTTOM + 2);
@@ -280,8 +342,8 @@ static void filer_draw(FilerState *s)
 
     /* row 54: card bar */
     {
-        uint64_t total_bytes = fab_card_total();
-        uint64_t used_bytes  = fab_card_used();
+        uint64_t total_bytes = s->card_total;
+        uint64_t used_bytes  = s->card_used;
         uint64_t free_bytes  = total_bytes > used_bytes ? total_bytes - used_bytes : 0;
         int pct = total_bytes > 0 ? (int)(used_bytes * 100 / total_bytes) : 0;
         int fill = pct / 5;
@@ -331,7 +393,7 @@ static void filer_draw(FilerState *s)
     tui_putc(BOX_V);
     tui_gotoxy(2, LIST_BOTTOM + 4);
     {
-        const char *hints = " Up/Down select  S+Up parent  ENTER open  D del  R ren  ESC back";
+        const char *hints = " Up/Down select  S+Up parent  ENTER open  N new  D del  R ren  ESC back";
         int len = (int)strlen(hints);
         tui_puts(hints);
         for (i = len; i < SCRW - 2; i++) tui_putc(' ');
@@ -345,6 +407,22 @@ static void filer_draw(FilerState *s)
     tui_putc(BOX_BL);
     for (i = 0; i < SCRW - 2; i++) tui_putc(BOX_H);
     tui_putc(BOX_BR);
+}
+
+/* one-line message on the hint row; any key dismisses it */
+static void filer_msg(const char *msg)
+{
+    char line[SCRW + 2];
+    int c, row = LIST_BOTTOM + 4;
+
+    snprintf(line, sizeof line, " %.*s  (press a key)", SCRW - 20, msg);
+    for (c = (int)strlen(line); c < SCRW; c++) line[c] = ' ';
+    line[SCRW] = '\0';
+    tui_gotoxy(1, row);
+    tui_color(TUI_WHITE, TUI_RED);
+    tui_puts(line);
+    tui_color(TUI_WHITE, TUI_BLACK);
+    tui_getch();
 }
 
 /* prompt */
@@ -375,7 +453,8 @@ static int filer_prompt(const char *prompt, char *dest, int maxlen)
             continue;
         }
         if (c == 27) { dest[0] = '\0'; tui_cursor(0, 0); return -1; }
-        if (c >= 32 && c < 127 && len < maxlen - 1) {
+        if (c >= 32 && c < 127 && len < maxlen - 1 &&
+            (int)strlen(prompt) + 3 + len < SCRW - 1) {
             dest[len++] = (char)c;
             tui_putc(c);
         }
@@ -389,7 +468,7 @@ static int filer_prompt(const char *prompt, char *dest, int maxlen)
 /* main entry */
 int fb_show_files(char *out_path, int out_len)
 {
-    FilerState *s = (FilerState *)malloc(sizeof(FilerState));
+    FilerState *s = (FilerState *)big_alloc(sizeof(FilerState));
     int result = 0;
 
     if (!s) return 0;
@@ -397,6 +476,7 @@ int fb_show_files(char *out_path, int out_len)
     tui_cursor(0, 0);
     memset(s, 0, sizeof *s);
     strcpy(s->path, "/");
+    filer_card_refresh(s);
     filer_rescan(s);
 
     tui_clear();
@@ -497,6 +577,32 @@ int fb_show_files(char *out_path, int out_len)
             continue;
         }
 
+        if (c == 'n' || c == 'N') {
+            char nm[128];
+            if (filer_prompt("New file name: ", nm, sizeof nm) == 0 && nm[0]) {
+                if (!name_ok(nm)) {
+                    filer_msg("Invalid name (no \\ / : * ? \" < > |)");
+                } else {
+                    if (name_in_use(s, nm, 1)) {
+                        filer_msg("A folder already has that name");
+                    } else {
+                        char tmp[260];
+                        if (strcmp(s->path, "/") == 0)
+                            snprintf(tmp, sizeof tmp, "/%s", nm);
+                        else
+                            snprintf(tmp, sizeof tmp, "%s%s", s->path, nm);
+                        strncpy(out_path, tmp, out_len - 1);
+                        out_path[out_len - 1] = '\0';
+                        result = 1;
+                        break;
+                    }
+                }
+            }
+            tui_clear();
+            filer_draw(s);
+            continue;
+        }
+
         if (c == 'd' || c == 'D') {
             if (s->count > 0) {
                 FabDirEntry *e = &s->entries[s->cursor];
@@ -510,7 +616,11 @@ int fb_show_files(char *out_path, int out_len)
                             snprintf(tmp, sizeof tmp, "/%s", e->name);
                         else
                             snprintf(tmp, sizeof tmp, "%s%s", s->path, e->name);
-                        fab_remove(tmp);
+                        if (fab_remove(tmp) != 0) {
+                            filer_msg("Delete failed");
+                        } else {
+                            filer_card_refresh(s);
+                        }
                         filer_rescan(s);
                     }
                     tui_clear();
@@ -532,15 +642,22 @@ int fb_show_files(char *out_path, int out_len)
                     newname[0] = '\0';
                     if (filer_prompt(prompt, newname, sizeof newname) == 0 &&
                         newname[0] != '\0' && strcmp(newname, e->name) != 0) {
-                        if (strcmp(s->path, "/") == 0) {
-                            snprintf(tmp_from, sizeof tmp_from, "/%s", e->name);
-                            snprintf(tmp_to,   sizeof tmp_to,   "/%s", newname);
+                        if (!name_ok(newname)) {
+                            filer_msg("Invalid name (no \\ / : * ? \" < > |)");
+                        } else if (name_in_use(s, newname, 0)) {
+                            filer_msg("That name is already used here");
                         } else {
-                            snprintf(tmp_from, sizeof tmp_from, "%s%s", s->path, e->name);
-                            snprintf(tmp_to,   sizeof tmp_to,   "%s%s", s->path, newname);
+                            if (strcmp(s->path, "/") == 0) {
+                                snprintf(tmp_from, sizeof tmp_from, "/%s", e->name);
+                                snprintf(tmp_to,   sizeof tmp_to,   "/%s", newname);
+                            } else {
+                                snprintf(tmp_from, sizeof tmp_from, "%s%s", s->path, e->name);
+                                snprintf(tmp_to,   sizeof tmp_to,   "%s%s", s->path, newname);
+                            }
+                            if (fab_rename(tmp_from, tmp_to) != 0)
+                                filer_msg("Rename failed");
+                            filer_rescan(s);
                         }
-                        fab_rename(tmp_from, tmp_to);
-                        filer_rescan(s);
                     }
                     tui_clear();
                     filer_draw(s);

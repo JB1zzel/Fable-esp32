@@ -17,14 +17,41 @@
 #define GOX     (POP_X + 1)
 #define GOY     (POP_Y + 3)
 
+#define MAX_TAIL (GW * GH)        /* the snake can never be longer than the board */
+
 static int *tailX = NULL, *tailY = NULL;
 static int tailLen;
 static int snakeX, snakeY, fruitX, fruitY;
 static int dir;           /* 0=stopped, 1=left, 2=right, 3=up, 4=down */
+static int moved_dir;     /* direction of the last step actually taken */
 static int score;
 static int gameover;
 
-static void setup(void)
+/* true if (x,y) is under the head or any tail segment */
+static int on_snake(int x, int y)
+{
+    int k;
+    if (x == snakeX && y == snakeY) return 1;
+    for (k = 0; k < tailLen; k++)
+        if (tailX[k] == x && tailY[k] == y) return 1;
+    return 0;
+}
+
+static void place_fruit(void)
+{
+    int tries;
+    for (tries = 0; tries < 200; tries++) {
+        fruitX = 1 + rand() % (GW - 2);
+        fruitY = 1 + rand() % (GH - 2);
+        if (!on_snake(fruitX, fruitY)) return;
+    }
+    /* very full board: take the first free cell */
+    for (fruitY = 0; fruitY < GH; fruitY++)
+        for (fruitX = 0; fruitX < GW; fruitX++)
+            if (!on_snake(fruitX, fruitY)) return;
+}
+
+static void game_setup(void)
 {
     gameover = 0;
     score = 0;
@@ -32,14 +59,23 @@ static void setup(void)
     snakeX = GW / 2;
     snakeY = GH / 2;
     dir = 0;
-    fruitX = 1 + rand() % (GW - 2);
-    fruitY = 1 + rand() % (GH - 2);
+    moved_dir = 0;
+    srand((unsigned)tui_millis());
+    place_fruit();
+}
+
+static void draw_score(void)
+{
+    char buf[32];
+    snprintf(buf, sizeof buf, "Score: %-6d", score);
+    tui_color(TUI_WHITE, TUI_BLACK);
+    tui_gotoxy(POP_X + POP_W - 2 - (int)strlen(buf), POP_Y + 1);
+    tui_puts(buf);
 }
 
 static void draw_frame(void)
 {
     int i;
-    char buf[32];
 
     tui_color(TUI_WHITE, TUI_BLACK);
 
@@ -56,10 +92,6 @@ static void draw_frame(void)
     for (i = 0; i < POP_W - 2; i++) tui_putc(' ');
     tui_gotoxy(POP_X + 2, POP_Y + 1);
     tui_puts("COBRA");
-
-    snprintf(buf, sizeof buf, "Score: %d", score);
-    tui_gotoxy(POP_X + POP_W - 2 - (int)strlen(buf), POP_Y + 1);
-    tui_puts(buf);
 
     tui_gotoxy(POP_X + POP_W - 1, POP_Y + 1);
     tui_putc(0xB3);
@@ -101,37 +133,32 @@ static void draw_frame(void)
     tui_putc(0xD9);
 }
 
+/* Draws the playfield one row at a time: one cursor move per row instead
+ * of one per cell, which is far fewer writes to the terminal. */
 static void draw(void)
 {
+    static unsigned char grid[GH][GW];
     int i, j;
 
-    draw_frame();
+    memset(grid, ' ', sizeof grid);
+    for (i = 0; i < tailLen; i++)
+        if (tailX[i] >= 0 && tailX[i] < GW && tailY[i] >= 0 && tailY[i] < GH)
+            grid[tailY[i]][tailX[i]] = 0xB2;              /* body */
+    if (snakeX >= 0 && snakeX < GW && snakeY >= 0 && snakeY < GH)
+        grid[snakeY][snakeX] = 0xDB;                      /* head */
+    grid[fruitY][fruitX] = 0xB2;                          /* fruit */
 
-    /* playfield contents */
+    tui_color(TUI_WHITE, TUI_BLACK);
     for (i = 0; i < GH; i++) {
+        tui_gotoxy(GOX, GOY + i);
         for (j = 0; j < GW; j++) {
-            char c = ' ';
-            int k;
-            int is_fruit = 0;
-
-            if (i == snakeY && j == snakeX) {
-                c = 0xDB;                 /* █ head */
-            } else if (i == fruitY && j == fruitX) {
-                c = 0xB2;                 /* ▓ fruit */
-                is_fruit = 1;
+            if (i == fruitY && j == fruitX) {
+                tui_color(TUI_YELLOW, TUI_BLACK);
+                tui_putc(grid[i][j]);
+                tui_color(TUI_WHITE, TUI_BLACK);
             } else {
-                for (k = 0; k < tailLen; k++) {
-                    if (tailX[k] >= 0 && tailX[k] == j && tailY[k] == i) {
-                        c = 0xB2;         /* ▓ body */
-                        break;
-                    }
-                }
+                tui_putc(grid[i][j]);
             }
-
-            tui_gotoxy(GOX + j, GOY + i);
-            if (is_fruit) tui_color(TUI_YELLOW, TUI_BLACK);
-            else          tui_color(TUI_WHITE, TUI_BLACK);
-            tui_putc(c);
         }
     }
 }
@@ -145,17 +172,17 @@ static void handle_input(void)
         if (c == 0 || c == 224) {
             code = tui_getch();
             switch (code) {
-            case 75: if (dir != 2) dir = 1; break;   /* left */
-            case 77: if (dir != 1) dir = 2; break;   /* right */
-            case 72: if (dir != 4) dir = 3; break;   /* up */
-            case 80: if (dir != 3) dir = 4; break;   /* down */
+            case 75: if (moved_dir != 2) dir = 1; break;   /* left */
+            case 77: if (moved_dir != 1) dir = 2; break;   /* right */
+            case 72: if (moved_dir != 4) dir = 3; break;   /* up */
+            case 80: if (moved_dir != 3) dir = 4; break;   /* down */
             }
         } else {
             switch (c) {
-            case 'a': case 'A': if (dir != 2) dir = 1; break;
-            case 'd': case 'D': if (dir != 1) dir = 2; break;
-            case 'w': case 'W': if (dir != 4) dir = 3; break;
-            case 's': case 'S': if (dir != 3) dir = 4; break;
+            case 'a': case 'A': if (moved_dir != 2) dir = 1; break;
+            case 'd': case 'D': if (moved_dir != 1) dir = 2; break;
+            case 'w': case 'W': if (moved_dir != 4) dir = 3; break;
+            case 's': case 'S': if (moved_dir != 3) dir = 4; break;
             case 'x': case 'X': gameover = 1; break;
             case 27:            gameover = 1; break;   /* Esc */
             }
@@ -188,6 +215,7 @@ static void step(void)
     case 3: snakeY--; break;
     case 4: snakeY++; break;
     }
+    moved_dir = dir;
 
     /* wall collision */
     if (snakeX < 0 || snakeX >= GW || snakeY < 0 || snakeY >= GH)
@@ -200,36 +228,44 @@ static void step(void)
     }
 
     /* eat fruit */
-    if (snakeX == fruitX && snakeY == fruitY) {
-    score += 10;
-    if (tailLen > 0) {
-        tailX[tailLen] = tailX[tailLen - 1];
-        tailY[tailLen] = tailY[tailLen - 1];
-    }
-    tailLen++;
-    fruitX = 1 + rand() % (GW - 2);
-    fruitY = 1 + rand() % (GH - 2);
+    if (snakeX == fruitX && snakeY == fruitY && tailLen < MAX_TAIL - 1) {
+        score += 10;
+        if (tailLen > 0) {
+            tailX[tailLen] = tailX[tailLen - 1];
+            tailY[tailLen] = tailY[tailLen - 1];
+        }
+        tailLen++;
+        place_fruit();
     }
 }
+
 int fb_snake(void)
 {
     int i, j;  
  
     if (!tailX) {
-        tailX = (int *)heap_caps_malloc(100 * sizeof(int), MALLOC_CAP_SPIRAM);
-        tailY = (int *)heap_caps_malloc(100 * sizeof(int), MALLOC_CAP_SPIRAM);
-        if (!tailX || !tailY) return 1;
+        tailX = (int *)heap_caps_malloc(MAX_TAIL * sizeof(int), MALLOC_CAP_SPIRAM);
+        tailY = (int *)heap_caps_malloc(MAX_TAIL * sizeof(int), MALLOC_CAP_SPIRAM);
+        if (!tailX || !tailY) {
+            if (tailX) heap_caps_free(tailX);
+            if (tailY) heap_caps_free(tailY);
+            tailX = tailY = NULL;
+            return 1;
+        }
     }
 
     tui_cursor(0, 0);
-    //tui_clear();
 
-    setup();
+    game_setup();
+    draw_frame();                      /* static parts: drawn once */
+    draw_score();
 
     while (!gameover) {
+        int old_score = score;
         draw();
         handle_input();
         step();
+        if (score != old_score) draw_score();
         tui_delay(120);
     }
 
@@ -249,6 +285,7 @@ int fb_snake(void)
         tui_gotoxy(GOX + (GW - 21) / 2, GOY + GH / 2 + 3);
         tui_puts("Press any key to exit");
     }
+    while (tui_key_pending()) tui_getch();   /* keys pressed as we died */
     tui_getch();
 
     tui_cursor(1, 0);

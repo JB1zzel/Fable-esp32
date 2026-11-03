@@ -36,17 +36,23 @@ void fb_help_screen(void)
     tui_puts("  F4            spellcheck");
     tui_gotoxy(1, 16);
     tui_puts("  F5            highlight spelling in document");
-    tui_gotoxy(1, 18); 
-    tui_puts("  Ctrl+F        find");
+    tui_gotoxy(1, 17);
+    tui_puts("  F6            diary calendar (* = day has an entry)");
+    tui_gotoxy(1, 18);
+    tui_puts("  F7            snake game");
     tui_gotoxy(1, 19);
-    tui_puts("  Ctrl+R        find & replace");
-    tui_gotoxy(1, 20);
-    tui_puts("  Ctrl+B/X/P    mark / cut / paste");
+    tui_puts("  F9            Wi-Fi setup");
     tui_gotoxy(1, 21);
-    tui_puts("  Ctrl+N/O      new file / Open");
+    tui_puts("  Ctrl+F        find");
     tui_gotoxy(1, 22);
-   /* tui_puts("  Ctrl+D        diary");*/
+    tui_puts("  Ctrl+R        find & replace");
     tui_gotoxy(1, 23);
+    tui_puts("  Ctrl+B/X/P    mark / cut / paste");
+    tui_gotoxy(1, 24);
+    tui_puts("  Ctrl+N        new / open file (browser: N new, D del, R rename)");
+    tui_gotoxy(1, 25);
+    tui_puts("  Ctrl+O        open file by path");
+    tui_gotoxy(1, 27);
     tui_puts("  Esc           quit (prompts if modified)");
 
     tui_gotoxy(1, SCRH + 1);

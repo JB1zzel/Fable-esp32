@@ -42,7 +42,7 @@ int   fab_exists(const char *path);
 /* ---- structured directory listing for the Filer ---- */
 
 typedef struct {
-    char     name[64];
+    char     name[128];     /* entries with longer names are not listed */
     uint32_t size;       /* file size in bytes (0 for dirs) */
     uint32_t mtime;      /* unix epoch seconds, 0 if unknown */
     int      is_dir;
@@ -54,8 +54,10 @@ uint64_t fab_card_used(void);
 /* Fills out[] with up to max entries of the given directory.
  * Entries are sorted: directories first (alphabetical), then files
  * by mtime descending. ".." is NOT included - caller synthesizes it.
+ * If more is not NULL it is set to 1 when the folder had further entries
+ * that did not fit in max (the list is then incomplete), else 0.
  * Returns count (>= 0). */
-int   fab_dir_entries(const char *path, FabDirEntry *out, int max);
+int   fab_dir_entries(const char *path, FabDirEntry *out, int max, int *more);
 
 #ifdef __cplusplus
 }

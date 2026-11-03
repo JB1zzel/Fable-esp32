@@ -118,9 +118,15 @@ SD wiring on the TTGO VGA32: `SPI.begin(14, 2, 12, 13)` and `SD.begin(13)`.
 
 | F5 | Toggle spell marks |
 
+| F6 | Diary calendar (days with an entry are marked `*`) |
+
+| F7 | Snake game |
+
+| F9 | Wi-Fi setup |
+
 | Ctrl+O | Open file |
 
-| Ctrl+N | New / open document (file browser) |
+| Ctrl+N | New / open document (file browser: N new file, D delete, R rename) |
 
 | Ctrl+B | Mark block; press again to end mark and copy to clipboard |
 
@@ -176,3 +182,29 @@ Change `FABGLIB_MINFREELARGESTBLOCK` from `40000` to `20000`.
 Without this the VGA viewport allocates at 640×444 or smaller
 and the editor loses rows. Lost on `pio run -t clean`.
 
+
+
+## Source layout (`src/`)
+
+| File | What it does |
+|---|---|
+| `main.cpp` | Arduino `setup()`: Wi-Fi + NTP time at boot, SD card, starts `fable_main` |
+| `fableGL.c` | `fable_main()`: start-up and the key loop |
+| `editor.h` / `editor.c` | The document being edited (line buffer, cursor, file name) shared by the files below |
+| `edit.c` | Cursor movement and text edits |
+| `block.c` | Mark, cut, copy, paste |
+| `find.c` | Find and replace all |
+| `reflow.c` | Paragraph reflow (F2) |
+| `docio.c` | Load, save, Save As, new document |
+| `spellui.c` | Spell marks (F5) and interactive spellcheck (F4) |
+| `screen.c` | Status bar, prompt bar, drawing the text |
+| `filer.c` | File browser (Ctrl+N) |
+| `calendar.c` / `diary.c` | Diary calendar (F6), one file per day |
+| `clock.c` | Time string and the Wi-Fi setup page (F9) |
+| `prompt.c`, `help.c`, `snake.c` | Text prompt, help screen, snake game (F7) |
+| `tui_fabgl.cpp`, `file_fabgl.cpp` | FabGL screen/keyboard and SD card drivers |
+| `tinyspell.c` | Dictionary spell checker |
+
+`tools/equiv-test/` holds a host-side regression test: it replays random key
+presses through the editor and hashes the screen output, so two versions of
+the source can be compared without an ESP32 (see `run.sh`).

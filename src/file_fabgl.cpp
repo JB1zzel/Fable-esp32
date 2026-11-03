@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "file_fabgl.h"
@@ -174,10 +175,6 @@ int fab_list_dir(const char *path, char names[][32], int max)
     make_full(path, fullpath, sizeof fullpath);
 
     dir = SD.open(fullpath);
-    Serial.printf("fab_dir_entries: '%s' opened=%d isdir=%d\n",
-              fullpath,
-              dir ? 1 : 0,
-              (dir && dir.isDirectory()) ? 1 : 0);
     if (!dir || !dir.isDirectory()) {
         if (dir) dir.close();
         return 0;
@@ -229,12 +226,13 @@ static int cmp_dir_entry(const void *pa, const void *pb)
     return name_cmp(a->name, b->name);
 }
 
-int fab_dir_entries(const char *path, FabDirEntry *out, int max)
+int fab_dir_entries(const char *path, FabDirEntry *out, int max, int *more)
 {
     char fullpath[FAB_PATH_MAX];
     int n = 0;
     File dir;
 
+    if (more) *more = 0;
     if (!out || max <= 0) return 0;
     make_full(path, fullpath, sizeof fullpath);
 
@@ -256,7 +254,10 @@ int fab_dir_entries(const char *path, FabDirEntry *out, int max)
         const char *slash = strrchr(nm, '/');
         if (slash) nm = slash + 1;
 
-        if (strcmp(nm, ".") != 0 && strcmp(nm, "..") != 0) {
+        /* names that do not fit in out[].name are skipped: a cut-off name
+         * would point at a file that does not exist */
+        if (strcmp(nm, ".") != 0 && strcmp(nm, "..") != 0 &&
+            strlen(nm) < sizeof(out[n].name)) {
             strncpy(out[n].name, nm, sizeof(out[n].name) - 1);
             out[n].name[sizeof(out[n].name) - 1] = '\0';
             out[n].is_dir = e.isDirectory() ? 1 : 0;
@@ -270,6 +271,10 @@ int fab_dir_entries(const char *path, FabDirEntry *out, int max)
         }
         e.close();
         e = dir.openNextFile();
+    }
+    if (e) {                       /* stopped because out[] is full */
+        if (more) *more = 1;
+        e.close();
     }
     dir.close();
 
