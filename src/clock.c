@@ -1,7 +1,9 @@
-/* clock.c - system clock string and the Wi-Fi setup page (F9)
+/* clock.c - the date and time string, and (ESP32 only) the Wi-Fi setup page.
  *
- * The time itself is set once at boot by main.cpp (NTP); the ESP32 system
- * clock keeps running after Wi-Fi is switched off, so we just read time().
+ * ESP32:   the time is set once at boot by main.cpp (NTP); the system clock
+ *          keeps running after Wi-Fi is switched off, so we just read time().
+ *          F9 opens the Wi-Fi setup page.
+ * Windows: the PC's clock is used; there is no Wi-Fi page.
  */
 
 #include <stdio.h>
@@ -10,6 +12,7 @@
 #include "tui.h"
 #include "fable.h"
 
+#ifdef FABLE_ESP32
 static char boot_wifi_ssid[33] = "";
 
 void set_boot_wifi_ssid(const char *s)
@@ -17,25 +20,30 @@ void set_boot_wifi_ssid(const char *s)
     strncpy(boot_wifi_ssid, s, sizeof(boot_wifi_ssid) - 1);
     boot_wifi_ssid[sizeof(boot_wifi_ssid) - 1] = '\0';
 }
+#endif
 
-/* Reads the ESP32 system clock (set by NTP at boot, keeps running after
- * Wi-Fi is switched off). Writes "YYYY-MM-DD HH:MM" local time, or an
- * empty string if the clock has never been synced. */
+/* Reads the system clock. Writes "YYYY-MM-DD HH:MM" local time, or an empty
+ * string if the clock has never been set (ESP32 before the first NTP sync). */
 void fb_current_time_str(char *out, int out_len)
 {
     time_t t = time(NULL);
-    struct tm tm;
+    struct tm *tm;
 
     if (t < 1700000000) {              /* before Nov 2023 = not synced */
         out[0] = '\0';
         return;
     }
-    localtime_r(&t, &tm);
+    tm = localtime(&t);                /* same call on every compiler */
+    if (!tm) {
+        out[0] = '\0';
+        return;
+    }
     snprintf(out, out_len, "%04d-%02d-%02d %02d:%02d",
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min);
+             tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+             tm->tm_hour, tm->tm_min);
 }
 
+#ifdef FABLE_ESP32
 void fb_wifi_setup_page(void)
 {
     char ssid[33];
@@ -125,3 +133,4 @@ void fb_wifi_setup_page(void)
     tui_color(TUI_LGRAY, TUI_BLACK);
     tui_clear();
 }
+#endif /* FABLE_ESP32 */

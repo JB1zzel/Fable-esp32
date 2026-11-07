@@ -4,8 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tui.h"
-#include "file_fabgl.h"
 #include "editor.h"
+
+#include "fab_file.h"
 
 static int load_truncated = 0;
 
@@ -107,7 +108,7 @@ int ed_save_current(void)
     return save_file();
 }
 
-void ed_new_document(void)
+int ed_new_document(void)
 {
     char path[260];
     FILE *probe;
@@ -119,14 +120,14 @@ void ed_new_document(void)
         ed_prompt_bar("Save changes? (y/n/c) ");
         k = tui_getch();
         tui_color(TUI_LGRAY, TUI_BLACK);
-        if (k == 'c' || k == 'C' || k == 27) return;
+        if (k == 'c' || k == 'C' || k == 27) return ED_DOC_STAY;
         if (k == 'y' || k == 'Y') {
-            if (!ed_save_current()) return;
+            if (!ed_save_current()) return ED_DOC_STAY;
         }
     }
 
    
-    if (!fb_show_files(path, sizeof path)) return;
+    if (!fb_show_files(path, sizeof path)) return ED_DOC_CANCELLED;
 
     ed_nlines = 1;
     ed_lines[0][0] = '\0';
@@ -149,4 +150,5 @@ void ed_new_document(void)
         FILE *out = fopen(ed_filename, "wb");
         if (out) fclose(out);
     }
+    return ED_DOC_OPENED;
 }

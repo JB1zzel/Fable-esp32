@@ -1,5 +1,6 @@
 /* tui_fabgl.cpp - FabGL backend for Fable on TTGO VGA32 */
 
+#ifdef FABLE_ESP32   /* ESP32 build only (set by platformio.ini) */
 #include <fabgl.h>
 #include <Arduino.h>
 #include "tui.h"
@@ -394,3 +395,5 @@ void tui_exe_dir(char *out, int len)
 }
 
 }   /* extern "C" */
+
+#endif /* FABLE_ESP32 */

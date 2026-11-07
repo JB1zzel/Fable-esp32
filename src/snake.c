@@ -4,10 +4,6 @@
 #include "tui.h"
 #include "fable.h"
 
-#ifdef FABLE_ESP32
-#include "esp_heap_caps.h"
-#endif
-
 #define POP_X   20
 #define POP_Y   1
 #define POP_W   42
@@ -244,11 +240,11 @@ int fb_snake(void)
     int i, j;  
  
     if (!tailX) {
-        tailX = (int *)heap_caps_malloc(MAX_TAIL * sizeof(int), MALLOC_CAP_SPIRAM);
-        tailY = (int *)heap_caps_malloc(MAX_TAIL * sizeof(int), MALLOC_CAP_SPIRAM);
+        tailX = (int *)fable_big_calloc(MAX_TAIL, sizeof(int));
+        tailY = (int *)fable_big_calloc(MAX_TAIL, sizeof(int));
         if (!tailX || !tailY) {
-            if (tailX) heap_caps_free(tailX);
-            if (tailY) heap_caps_free(tailY);
+            free(tailX);
+            free(tailY);
             tailX = tailY = NULL;
             return 1;
         }

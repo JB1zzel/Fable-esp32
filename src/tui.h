@@ -10,6 +10,8 @@
 #ifndef TUI_H
 #define TUI_H
 
+#include "platform.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -50,12 +52,14 @@ void tui_putc(int c);
 void tui_puts(const char *s);
 void tui_cursor(int visible, int block); /* block=1 solid, block=0 underline */
 void tui_boot_colors(int delay_ms);
-/* wifi */
+#ifdef FABLE_ESP32
+/* wifi (the clock is set from the network on the ESP32; Windows has its own) */
 void set_boot_wifi_ssid(const char *s);
 
 int tui_wifi_scan(char names[][33], int max);
 int tui_wifi_save(const char *ssid, const char *pass);
 int tui_wifi_load(char *ssid, int ssid_len, char *pass, int pass_len);
+#endif
 /* Input */
 int  tui_getch(void);       /* blocking; returns key code, or -1 on EOF */
 int  tui_shift_down(void);  /* 1 if Shift is currently held */

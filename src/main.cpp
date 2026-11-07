@@ -1,3 +1,4 @@
+#ifdef FABLE_ESP32   /* ESP32 build only (set by platformio.ini) */
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
@@ -128,3 +129,5 @@ void setup() {
 }
 
 void loop() { }
+
+#endif /* FABLE_ESP32 */

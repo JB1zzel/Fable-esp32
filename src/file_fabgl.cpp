@@ -1,5 +1,6 @@
 /* file_fabgl.cpp - fopen/fread/fwrite shim over SD for ESP32 */
 
+#ifdef FABLE_ESP32   /* ESP32 build only (set by platformio.ini) */
 #include <Arduino.h>
 #include <SD.h>
 #include <stdio.h>
@@ -117,6 +118,14 @@ int fab_exists(const char *path)
     char fullpath[FAB_PATH_MAX];
     make_full(path, fullpath, sizeof fullpath);
     return SD.exists(fullpath) ? 1 : 0;
+}
+
+int fab_mkdir(const char *path)
+{
+    char fullpath[FAB_PATH_MAX];
+    make_full(path, fullpath, sizeof fullpath);
+    if (SD.exists(fullpath)) return 0;
+    return SD.mkdir(fullpath) ? 0 : -1;
 }
 
 int fab_rename(const char *from, const char *to)
@@ -283,3 +292,5 @@ int fab_dir_entries(const char *path, FabDirEntry *out, int max, int *more)
 }
 
 }  /* extern "C" */
+
+#endif /* FABLE_ESP32 */

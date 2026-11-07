@@ -1,0 +1,14 @@
+cwd: C:\Users\User1\Documents\spellcheckerproject\src
+dict.smd exists (Win32): YES
+fab_exists("dict.smd") = 1
+fab_exists("/dict.smd") = 1
+fab_exists("/") = 1
+fab_dir_entries("/") returned 8 entries
+  docio.c
+  calendar.c
+  clock.c
+  diary.c
+  block.c
+  edit.c
+  editor.c
+  dict.smd

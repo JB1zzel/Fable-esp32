@@ -62,7 +62,11 @@ void ed_reflow(int width);
 /* docio.c */
 int ed_load_file(const char *fn);
 int ed_save_current(void);
-void ed_new_document(void);
+/* ed_new_document() results */
+#define ED_DOC_STAY       0   /* cancelled at the "Save changes?" prompt */
+#define ED_DOC_OPENED     1   /* a document was opened or created */
+#define ED_DOC_CANCELLED  2   /* Esc in the file browser */
+int  ed_new_document(void);
 /* screen.c */
 void ed_status_msg(const char *msg);
 void ed_prompt_bar(const char *text);

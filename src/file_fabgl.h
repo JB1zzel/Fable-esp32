@@ -39,6 +39,9 @@ int   fab_rename(const char *from, const char *to);
 /* 1 if the path exists (no error is logged when it does not). */
 int   fab_exists(const char *path);
 
+/* Creates a folder. 0 = created or already there. */
+int   fab_mkdir(const char *path);
+
 /* ---- structured directory listing for the Filer ---- */
 
 typedef struct {
@@ -67,6 +70,7 @@ int   fab_dir_entries(const char *path, FabDirEntry *out, int max, int *more);
  * NOTE: `remove` is intentionally NOT aliased here, because file_fabgl.cpp
  * itself calls SD.remove() and the macro would clobber it. */
 
+#ifndef FABLE_WINDOWS
 #define fopen   fab_fopen
 #define fgetc   fab_fgetc
 #define fputc   fab_fputc
@@ -78,5 +82,5 @@ int   fab_dir_entries(const char *path, FabDirEntry *out, int max, int *more);
 #define ungetc  fab_ungetc
 #define fseek   fab_fseek
 #define ftell   fab_ftell
-
+#endif
 #endif

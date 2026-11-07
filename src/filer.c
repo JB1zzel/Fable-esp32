@@ -5,12 +5,9 @@
 #include <string.h>
 #include <time.h>
 #include "tui.h"
-#include "file_fabgl.h"
 #include "fable.h"
 
-#ifdef FABLE_ESP32
-#include "esp_heap_caps.h"
-#endif
+#include "fab_file.h"
 
 #define MAX_ENTRIES  512
 #define LIST_TOP     4
@@ -41,18 +38,6 @@ typedef struct {
     uint64_t    card_total;     /* cached: SD.usedBytes() walks the FAT, */
     uint64_t    card_used;      /* so it is read once, not on every redraw */
 } FilerState;
-
-/* Big buffers go to PSRAM when there is some: internal RAM is needed by
- * the VGA driver. free() releases either kind. */
-static void *big_alloc(size_t n)
-{
-    void *p = NULL;
-#ifdef FABLE_ESP32
-    p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-#endif
-    if (!p) p = malloc(n);
-    return p;
-}
 
 static void filer_card_refresh(FilerState *s)
 {
@@ -95,9 +80,35 @@ static void filer_descend(FilerState *s, const char *name)
     else         snprintf(s->path + 1, sizeof(s->path) - 1, "%s/", name);
 }
 
+#ifdef FABLE_WINDOWS
+/* On Windows "/" is the folder Fable was started in, and it is not the top
+ * of anything: the user may walk above it. Going above it turns the path
+ * into "/../", "/../../" ... which file_win.c maps to "..\", "..\..\".
+ * True for "/", "/../", "/../../" (only ".." segments). */
+static int path_is_only_dotdots(const char *p)
+{
+    while (*p == '/') p++;
+    while (*p) {
+        if (p[0] != '.' || p[1] != '.' || (p[2] != '/' && p[2] != '\0')) return 0;
+        p += 2;
+        while (*p == '/') p++;
+    }
+    return 1;
+}
+#endif
+
 static void filer_go_up(FilerState *s)
 {
     size_t len = strlen(s->path);
+#ifdef FABLE_WINDOWS
+    if (path_is_only_dotdots(s->path)) {
+        if (len + 4 < sizeof s->path) {
+            if (len == 0 || s->path[len - 1] != '/') strcat(s->path, "/");
+            strcat(s->path, "../");
+        }
+        return;
+    }
+#endif
     if (len <= 1) return;
     if (s->path[len - 1] == '/') len--;
     while (len > 0 && s->path[len - 1] != '/') len--;
@@ -105,9 +116,31 @@ static void filer_go_up(FilerState *s)
     else          s->path[len] = '\0';
 }
 
+/* Enter on a folder entry: ".." goes up, anything else goes down. */
+static void filer_enter_dir(FilerState *s, const char *name)
+{
+    if (strcmp(name, "..") == 0) filer_go_up(s);
+    else                         filer_descend(s, name);
+}
+
 static void filer_rescan(FilerState *s)
 {
     s->count = fab_dir_entries(s->path, s->entries, MAX_ENTRIES, &s->more);
+#ifdef FABLE_WINDOWS
+    /* a ".." entry at the top of every list, so folders (and the way back
+     * up) are always visible */
+    if (s->count < MAX_ENTRIES) {
+        memmove(&s->entries[1], &s->entries[0], (size_t)s->count * sizeof(FabDirEntry));
+        memset(&s->entries[0], 0, sizeof(FabDirEntry));
+        strcpy(s->entries[0].name, "..");
+        s->entries[0].is_dir = 1;
+        s->count++;
+    }
+    /* start on the first real entry, so Enter picks a file as before;
+     * ".." is one Up key away */
+    if (s->cursor == 0 && s->count > 1 && strcmp(s->entries[0].name, "..") == 0)
+        s->cursor = 1;
+#endif
     if (s->cursor >= s->count) s->cursor = s->count > 0 ? s->count - 1 : 0;
     if (s->cursor < 0) s->cursor = 0;
     if (s->scroll > s->cursor) s->scroll = s->cursor;
@@ -306,6 +339,7 @@ static void filer_draw(FilerState *s)
         int nfiles = 0, ndirs = 0;
         uint64_t total = 0;
         for (i = 0; i < s->count; i++) {
+            if (strcmp(s->entries[i].name, "..") == 0) continue;
             if (s->entries[i].is_dir) ndirs++;
             else { nfiles++; total += s->entries[i].size; }
         }
@@ -468,7 +502,7 @@ static int filer_prompt(const char *prompt, char *dest, int maxlen)
 /* main entry */
 int fb_show_files(char *out_path, int out_len)
 {
-    FilerState *s = (FilerState *)big_alloc(sizeof(FilerState));
+    FilerState *s = (FilerState *)fable_big_calloc(1, sizeof(FilerState));
     int result = 0;
 
     if (!s) return 0;
@@ -496,7 +530,7 @@ int fb_show_files(char *out_path, int out_len)
             if (s->count > 0) {
                 FabDirEntry *e = &s->entries[s->cursor];
                 if (e->is_dir) {
-                    filer_descend(s, e->name);
+                    filer_enter_dir(s, e->name);
                     s->cursor = 0; s->scroll = 0;
                     filer_rescan(s);
                     needs_full_redraw = 1;
@@ -534,7 +568,7 @@ int fb_show_files(char *out_path, int out_len)
                     if (s->count > 0) {
                         FabDirEntry *e = &s->entries[s->cursor];
                         if (e->is_dir) {
-                            filer_descend(s, e->name);
+                            filer_enter_dir(s, e->name);
                             s->cursor = 0; s->scroll = 0;
                             filer_rescan(s);
                             needs_full_redraw = 1;
@@ -631,7 +665,7 @@ int fb_show_files(char *out_path, int out_len)
         }
 
         if (c == 'r' || c == 'R') {
-            if (s->count > 0) {
+            if (s->count > 0 && strcmp(s->entries[s->cursor].name, "..") != 0) {
                 FabDirEntry *e = &s->entries[s->cursor];
                 {
                     char newname[64];
