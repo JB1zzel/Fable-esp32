@@ -22,7 +22,7 @@
 #define POP_X    15
 #define POP_Y     1
 #define POP_W     41
-#define POP_H     22
+#define POP_H     25
 #define GOY       (POP_Y + 3)
 
 #define COL_SP     6
@@ -66,7 +66,7 @@ typedef struct { int fg, bg, ch, on; const char *name; } felt_variant;
 static const felt_variant felt_variants[] = {
     { TUI_BLACK,  TUI_BLACK, ' ',  0, "Classic"     },
     { TUI_GREEN,  TUI_BLACK, 0xB0, 1, "Oval Room"   },
-    { TUI_LGREEN, TUI_BLACK, 0xB0, 1, "Pale Powder" },
+    { TUI_CYAN,  TUI_BLACK, 0xB0, 1, "Pale Powder" },
     { TUI_DGRAY,  TUI_BLACK, 0xB0, 1, "French Gray"     },
     { TUI_CYAN,   TUI_BLUE,  0xB0, 1, "Skylight"      },
     { TUI_BROWN,  TUI_BLACK, 0xB0, 1, "Elephant's Breath"},
@@ -661,6 +661,7 @@ static void draw_cursor(int sel_row, int sel_col, int sel_depth,
     int cx = -1, cy = -1;
     int sx = -1, sy = -1;
 
+    /* current position */
     if (sel_row == 0) {
         cx = slot_x(sel_col) + 2;
         cy = 0;
@@ -672,6 +673,7 @@ static void draw_cursor(int sel_row, int sel_col, int sel_depth,
         cy = 2;
     }
 
+    /* selected source */
     if (selected_slot >= 0) {
         if (selected_slot >= SLOT_COL1) {
             int cidx = selected_slot - SLOT_COL1;
@@ -684,10 +686,17 @@ static void draw_cursor(int sel_row, int sel_col, int sel_depth,
         }
     }
 
-    paint_marker(cx, cy, TUI_YELLOW, &last_cur_x, &last_cur_y);
     if (sx == cx && sy == cy) {
+        /* cursor is on the selected card: draw a combined '+' */
+        paint_marker(-1, -1, 0, &last_cur_x, &last_cur_y);
         paint_marker(-1, -1, 0, &last_sel_x, &last_sel_y);
+        put_at(cx, cy, "+", TUI_LMAGENTA, felt_variants[felt_idx].bg);
+        last_cur_x = cx;
+        last_cur_y = cy;
+        last_sel_x = -1;
+        last_sel_y = -1;
     } else {
+        paint_marker(cx, cy, TUI_YELLOW, &last_cur_x, &last_cur_y);
         paint_marker(sx, sy, TUI_LRED, &last_sel_x, &last_sel_y);
     }
 }
