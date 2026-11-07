@@ -39,7 +39,9 @@
 #include <string.h>
 #include "tui.h"
 #include "tinyspell.h"
+#ifdef FABLE_ESP32
 #include "esp_heap_caps.h"
+#endif
 #include "editor.h"
 
 static void resolve_dict_path(void)
@@ -54,8 +56,13 @@ int fable_main(int argc, char **argv)
 {
     int ch;
 
+#ifdef FABLE_ESP32
     ed_lines     = (char (*)[MAXLINE])heap_caps_calloc(MAXLINES, MAXLINE, MALLOC_CAP_SPIRAM);
     ed_spell_bad = (unsigned char (*)[MAXLINE / 8])heap_caps_calloc(MAXLINES, MAXLINE / 8, MALLOC_CAP_SPIRAM);
+#else
+    ed_lines     = (char (*)[MAXLINE])calloc(MAXLINES, MAXLINE);
+    ed_spell_bad = (unsigned char (*)[MAXLINE / 8])calloc(MAXLINES, MAXLINE / 8);
+#endif
     if (!ed_lines || !ed_spell_bad) return 1;
 
     tui_init();

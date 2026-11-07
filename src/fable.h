@@ -9,7 +9,7 @@
 #define MAXLINES 256
 #define MAXLINE  1024
 #define SCRW     80
-#define SCRH     55   /* 55 text rows + 1 status row = 56 total (see FabGL DMA reserve) */
+#define SCRH     59   /* 59 text rows + 1 status row = 60 total (see FabGL DMA reserve) */
 
 //snake game
 int fb_snake(void);
