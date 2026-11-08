@@ -2,8 +2,11 @@
  *
  *   ESP32 (PlatformIO): FABLE_ESP32 is defined by platformio.ini.
  *   Windows:            FABLE_WINDOWS is defined here when the compiler
- *                       defines _WIN32, so no -D flag is needed (passing
- *                       -DFABLE_WINDOWS yourself still works).
+ *                       defines _WIN32.
+ *   Linux and other Unix: FABLE_POSIX is defined here when the compiler
+ *                       defines __unix__ or __APPLE__ (tested on Linux).
+ *   No -D flag is needed for the last two (passing one still works).
+ *   FABLE_DESKTOP is defined for Windows and POSIX: "a PC, not the ESP32".
  *
  * Every source file in src/ is built on both platforms; the files that only
  * make sense on one of them are wrapped in #ifdef and compile to nothing on
@@ -14,12 +17,20 @@
 
 #include <stdlib.h>
 
-#if !defined(FABLE_ESP32) && !defined(FABLE_WINDOWS) && defined(_WIN32)
-#define FABLE_WINDOWS 1
+#if !defined(FABLE_ESP32) && !defined(FABLE_WINDOWS) && !defined(FABLE_POSIX)
+#  if defined(_WIN32)
+#    define FABLE_WINDOWS 1
+#  elif defined(__unix__) || defined(__APPLE__)
+#    define FABLE_POSIX 1
+#  endif
 #endif
 
-#if !defined(FABLE_ESP32) && !defined(FABLE_WINDOWS)
-#error "Unknown platform: define FABLE_ESP32 (ESP32 build) or build on Windows"
+#if !defined(FABLE_ESP32) && !defined(FABLE_WINDOWS) && !defined(FABLE_POSIX)
+#error "Unknown platform: define FABLE_ESP32 (ESP32 build), or build on Windows or Linux"
+#endif
+
+#if defined(FABLE_WINDOWS) || defined(FABLE_POSIX)
+#define FABLE_DESKTOP 1
 #endif
 
 #ifdef FABLE_ESP32

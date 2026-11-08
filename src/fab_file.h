@@ -4,8 +4,10 @@
 
 #include "platform.h"
 
-#ifdef FABLE_WINDOWS
+#if defined(FABLE_WINDOWS)
 #include "file_win.h"
+#elif defined(FABLE_POSIX)
+#include "file_posix.h"
 #else
 #include "file_fabgl.h"
 #endif

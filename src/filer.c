@@ -80,10 +80,11 @@ static void filer_descend(FilerState *s, const char *name)
     else         snprintf(s->path + 1, sizeof(s->path) - 1, "%s/", name);
 }
 
-#ifdef FABLE_WINDOWS
-/* On Windows "/" is the folder Fable was started in, and it is not the top
+#ifdef FABLE_DESKTOP
+/* On a PC "/" is the folder Fable was started in, and it is not the top
  * of anything: the user may walk above it. Going above it turns the path
- * into "/../", "/../../" ... which file_win.c maps to "..\", "..\..\".
+ * into "/../", "/../../" ... which file_win.c / file_posix.c map to the
+ * parent folders.
  * True for "/", "/../", "/../../" (only ".." segments). */
 static int path_is_only_dotdots(const char *p)
 {
@@ -100,7 +101,7 @@ static int path_is_only_dotdots(const char *p)
 static void filer_go_up(FilerState *s)
 {
     size_t len = strlen(s->path);
-#ifdef FABLE_WINDOWS
+#ifdef FABLE_DESKTOP
     if (path_is_only_dotdots(s->path)) {
         if (len + 4 < sizeof s->path) {
             if (len == 0 || s->path[len - 1] != '/') strcat(s->path, "/");
@@ -126,7 +127,7 @@ static void filer_enter_dir(FilerState *s, const char *name)
 static void filer_rescan(FilerState *s)
 {
     s->count = fab_dir_entries(s->path, s->entries, MAX_ENTRIES, &s->more);
-#ifdef FABLE_WINDOWS
+#ifdef FABLE_DESKTOP
     /* a ".." entry at the top of every list, so folders (and the way back
      * up) are always visible */
     if (s->count < MAX_ENTRIES) {

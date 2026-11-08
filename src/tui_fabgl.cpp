@@ -225,6 +225,17 @@ void tui_init(void)
 
     Serial.printf("Terminal: %d cols x %d rows\n",
                   Terminal.getColumns(), Terminal.getRows());
+    Serial.printf("HEAP after terminal internal free=%u largest=%u\n",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    {
+        /* the 8x8 font gives viewport height / 8 rows; fewer means the
+         * terminal could not get the RAM it needed and kept its default size */
+        int expect = VGAController.getViewPortHeight() / 8;
+        if (Terminal.getRows() != expect)
+            Serial.printf("WARNING: terminal has %d rows, expected %d - out of RAM when it was created (too much static data or too little free heap)\n",
+                          Terminal.getRows(), expect);
+    }
     Serial.printf("viewport %d x %d\n",
               VGAController.getViewPortWidth(), VGAController.getViewPortHeight());
 }

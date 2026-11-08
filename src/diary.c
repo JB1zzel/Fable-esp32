@@ -3,8 +3,9 @@
  * One diary file per day: YYYY-MM-DD.txt in the diary folder.
  *
  *   ESP32:   /diary/ on the SD card
- *   Windows: the "diary" folder next to fable.exe, so the diary is the same
- *            wherever Fable is started from
+ *   Windows: the "diary" folder next to fable.exe
+ *   Linux:   the "diary" folder next to the fable program
+ *            (so the diary is the same wherever Fable is started from)
  *
  * This is the only place that knows where the files are and what they are
  * called; calendar.c and the editor both use it.
@@ -21,10 +22,14 @@
  * folder in the current directory. */
 static void diary_dir(char *out, int out_len)
 {
-#ifdef FABLE_WINDOWS
+#if defined(FABLE_WINDOWS)
     char exe[260];
     tui_exe_dir(exe, sizeof exe);            /* "C:\tools\fable\" or "" */
     snprintf(out, out_len, "%sdiary\\", exe);
+#elif defined(FABLE_POSIX)
+    char exe[260];
+    tui_exe_dir(exe, sizeof exe);            /* "//home/me/fable/" or "" */
+    snprintf(out, out_len, "%sdiary/", exe);
 #else
     snprintf(out, out_len, "/diary/");
 #endif

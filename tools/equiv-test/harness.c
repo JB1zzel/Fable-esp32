@@ -90,6 +90,7 @@ int fab_fclose(FILE*f){return fclose(f);} int fab_ungetc(int c,FILE*f){return un
 int fab_fseek(FILE*f,long o,int w){return fseek(f,o,w);} long fab_ftell(FILE*f){return ftell(f);}
 int fab_remove(const char*p){char f[600];full(p,f,sizeof f);return remove(f);}
 int fab_rename(const char*a,const char*b){char x[600],y[600];full(a,x,sizeof x);full(b,y,sizeof y);return rename(x,y);}
+int fab_mkdir(const char*p){char f[600];full(p,f,sizeof f);mkdir(f,0755);return 0;}
 int fab_exists(const char*p){char f[600];struct stat st;full(p,f,sizeof f);return stat(f,&st)==0;}
 int fab_list_dir(const char*p,char n[][32],int m){return 0;}
 uint64_t fab_card_total(void){return 8ULL<<30;} uint64_t fab_card_used(void){return 1ULL<<30;}

@@ -67,39 +67,6 @@ static const char *month_name(int m)
     return names[m];
 }
 
-/* Walks forward (+1) or back (-1) from *y/*m/*d, looking for a day whose
- * diary file exists. On success, updates *y/*m/*d and returns 1.
- * On wrap-around to the starting point, returns 0 (no other entries). */
-static int find_marked_day(int *y, int *m, int *d, int direction)
-{
-    int sy = *y, sm = *m, sd = *d;
-    int steps = 0;
-    int dim = days_in_month(*y, *m);
-
-    while (steps < 366 * 4) {      /* safety cap: 4 years */
-        *d += direction;
-
-        if (*d < 1) {
-            prev_month(y, m);
-            *d = days_in_month(*y, *m);
-        } else if (*d > dim) {
-            next_month(y, m);
-            *d = 1;
-        }
-        dim = days_in_month(*y, *m);
-
-        /* wrapped back to the start? */
-        if (*y == sy && *m == sm && *d == sd) return 0;
-
-        {
-            char path[64];
-            diary_path(path, sizeof path, *y, *m, *d);
-            if (fab_exists(path)) return 1;
-        }
-        steps++;
-    }
-    return 0;
-}
 /* ty/tm/td = today's date; the "today" mark is only drawn when the
  * displayed month is that month (td == 0 means clock unknown). */
 /* entries: bit (d-1) set = /diary/YYYY-MM-DD.txt exists for day d */
@@ -130,7 +97,7 @@ static void draw_calendar(int year, int month, int sel_day,
     col = first_dow;
 
     for (d = 1; d <= dim; d++) {
-        char cell[8];
+        char cell[16];
         snprintf(cell, sizeof cell, "%3d", d);
         tui_gotoxy(CAL_GRID_X + col * CAL_CELL_W, row);
 
@@ -261,28 +228,20 @@ int calendar_show(const char *now, char *out_path, int out_len)
                     next_month(&year, &month);
                 }
                 break;
-			case 75:                                 /* Left */
-				if (tui_shift_down()) {
-					find_marked_day(&year, &month, &sel, -1);
-				} else {
-					sel--;
-					if (sel < 1) {
-						prev_month(&year, &month);
-						sel = days_in_month(year, month);
-					}
-				}
-				break;
-			case 77:                                 /* Right */
-				if (tui_shift_down()) {
-					find_marked_day(&year, &month, &sel, +1);
-				} else {
-					sel++;
-					if (sel > days_in_month(year, month)) {
-						next_month(&year, &month);
-						sel = 1;
-					}
-				}
-				break;
+            case 75:                                 /* Left */
+                sel--;
+                if (sel < 1) {
+                    prev_month(&year, &month);
+                    sel = days_in_month(year, month);
+                }
+                break;
+            case 77:                                 /* Right */
+                sel++;
+                if (sel > days_in_month(year, month)) {
+                    next_month(&year, &month);
+                    sel = 1;
+                }
+                break;
             case 73:                                 /* PgUp */
                 prev_month(&year, &month);
                 dim = days_in_month(year, month);

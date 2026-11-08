@@ -1,7 +1,8 @@
 /* tui.h - terminal UI abstraction for the Z88-like suite
  *
- * Two backends exist:
- *   tui_console.c  - Windows CMD / ANSI terminal (for testing on PC)
+ * Three backends exist:
+ *   tui_console.c  - Windows console
+ *   tui_posix.c    - Linux terminal (ANSI)
  *   tui_fabgl.cpp  - ESP32 / FabGL (for the TTGO VGA32)
  *
  * Apps include this header and nothing else console-related.

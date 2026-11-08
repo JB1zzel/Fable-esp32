@@ -22,8 +22,8 @@
 /* ---------------- geometry ---------------- */
 #define POP_X    15
 #define POP_Y     1
-#define POP_W     41
-#define POP_H     25
+#define POP_W    41
+#define POP_H    25
 #define GOY       (POP_Y + 3)
 
 #define COL_SP     6
@@ -96,7 +96,10 @@ typedef struct {
     int selected, selected_index;
 } undo_state;
 
-static undo_state undo_stack[UNDO_DEPTH];
+/* 20 snapshots of 284 bytes is nearly 6 KB. That is too much for the ESP32's
+ * internal RAM (the 60-row VGA terminal needs it), so it is allocated when a
+ * game starts - in PSRAM when there is some - and freed when it ends. */
+static undo_state *undo_stack = NULL;
 static int undo_top = 0;
 
 /* ---------------- replay snapshot ---------------- */
@@ -1012,6 +1015,9 @@ static int run_solitaire(void)
     int quit = 0;
     int won = 0;
 
+    undo_stack = (undo_state *)fable_big_calloc(UNDO_DEPTH, sizeof(undo_state));
+    if (!undo_stack) return 1;
+
     tui_cursor(0, 0);
 
     clear_popup_region();
@@ -1287,6 +1293,8 @@ static int run_solitaire(void)
 
     clear_popup_region();
     free_game();
+    free(undo_stack);
+    undo_stack = NULL;
     tui_cursor(1, 0);
     return 0;
 }

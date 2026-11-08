@@ -45,7 +45,7 @@ static void resolve_dict_path(void)
 {
     char dir[260];
     tui_exe_dir(dir, sizeof dir);
-    if (dir[0])
+    if (dir[0] && strlen(dir) + 9 <= sizeof ed_dict_path)
         snprintf(ed_dict_path, sizeof ed_dict_path, "%sdict.smd", dir);
 }
 
@@ -307,8 +307,8 @@ int fable_main(int argc, char **argv)
             }
             {
                 int r = ed_new_document();
-#ifdef FABLE_WINDOWS
-                /* Windows has no other way out: Esc in the file browser quits */
+#ifdef FABLE_DESKTOP
+                /* a PC has no other way out: Esc in the file browser quits */
                 if (r == ED_DOC_CANCELLED) {
                     if (ed_modified) {            /* only if "n" was answered above */
                         int k;
