@@ -1,15 +1,16 @@
-/* solitaire.c - Klondike solitaire, compact cursor version.
- *
- * Build:  tcc solitaire.c -o solitaire.exe
+/* solitaire.c - Klondike solitaire for the Fable TUI framework.
  *
  * Controls:
  *   Arrows       move cursor (wraps at edges)
  *   Space        select source / select destination / cancel
  *   A            auto-move any legal cards to foundations (cascades)
- *   N            new game (prompts y/n in the bottom banner)
+ *   U            undo last move
+ *   N            new game (Y=yes R=replay N=no, then optional seed)
+ *   Enter        cycle felt theme
  *   Esc or Q     quit
  *
- * Cursor:  red '<' = selected source, yellow '<' = current position.
+ * Cursor:  yellow '<' = current position, red '<' = selected source,
+ *          magenta '+' = cursor on the selected card.
  */
 
 #include <stdio.h>
@@ -29,7 +30,6 @@
 #define COL_COUNT  7
 #define FDN_COUNT  4
 #define MAX_STACK 14
-
 
 /* ---------------- cards ---------------- */
 enum { SUIT_HEART, SUIT_SPADE, SUIT_CLUB, SUIT_DIAMOND, SUIT_COUNT };
@@ -60,21 +60,47 @@ typedef struct pile {
 
 static pile *piles[PILE_COUNT];
 static int  score;
+static unsigned long current_seed = 0;
+
 /* ---------------- felt themes ---------------- */
 typedef struct { int fg, bg, ch, on; const char *name; } felt_variant;
 
 static const felt_variant felt_variants[] = {
-    { TUI_BLACK,  TUI_BLACK, ' ',  0, "Classic"     },
-    { TUI_GREEN,  TUI_BLACK, 0xB0, 1, "Oval Room"   },
-    { TUI_CYAN,  TUI_BLACK, 0xB0, 1, "Pale Powder" },
-    { TUI_DGRAY,  TUI_BLACK, 0xB0, 1, "French Gray"     },
-    { TUI_CYAN,   TUI_BLUE,  0xB0, 1, "Skylight"      },
-    { TUI_BROWN,  TUI_BLACK, 0xB0, 1, "Elephant's Breath"},
-    { TUI_MAGENTA, TUI_BLUE, 0xB0, 1, "Magenta Wonderland"  },
+    { TUI_BLACK,   TUI_BLACK, ' ',  0, "Classic"            },
+    { TUI_GREEN,   TUI_BLACK, 0xB0, 1, "Oval Room"          },
+    { TUI_CYAN,    TUI_BLACK, 0xB0, 1, "Pale Powder"        },
+    { TUI_DGRAY,   TUI_BLACK, 0xB0, 1, "French Gray"        },
+    { TUI_CYAN,    TUI_BLUE,  0xB0, 1, "Skylight"           },
+    { TUI_BROWN,   TUI_BLACK, 0xB0, 1, "Elephant's Breath"  },
+    { TUI_MAGENTA, TUI_BLUE,  0xB0, 1, "Magenta Wonderland" },
 };
 #define FELT_COUNT ((int)(sizeof(felt_variants) / sizeof(felt_variants[0])))
 
-static int felt_idx = 0;   /* 0 = off, current appearance */
+static int felt_idx = 0;
+
+/* ---------------- undo snapshots ---------------- */
+#define UNDO_DEPTH 20
+
+typedef struct {
+    unsigned char suit;
+    unsigned char rank;
+    unsigned char revealed;
+    unsigned char pile;
+    unsigned char pos;
+} undo_card;
+
+typedef struct {
+    undo_card cards[RANK_COUNT * SUIT_COUNT];
+    int score;
+    int sel_row, sel_col, sel_depth;
+    int selected, selected_index;
+} undo_state;
+
+static undo_state undo_stack[UNDO_DEPTH];
+static int undo_top = 0;
+
+/* ---------------- replay snapshot ---------------- */
+static card deal_order[RANK_COUNT * SUIT_COUNT];
 
 /* ---------------- slots ---------------- */
 #define SLOT_STOCK   0
@@ -399,6 +425,7 @@ static void move_cards(pile *sp, pile *dp, int amount)
         card *next = peek_last(sp);
         if (next && !next->revealed) { next->revealed = 1; add_score(5); }
     }
+	if (sp->type == 'f' && dp->type == 'c') add_score(-15);   /* pull back penalty */
     if (dp->type == 'f') add_score(10);
     if (sp->type == 'w' && dp->type == 'c') add_score(5);
 }
@@ -412,8 +439,6 @@ static const char *try_move(int src_slot, int dst_slot, int src_index)
 
     if (spi < 0 || dpi < 0) return "Invalid slot";
 
-    /* stock is a source-only pile: you draw from it, you never put
-     * cards back onto it (except via redeal, which is internal) */
     if (dpi == P_DECK && spi != P_DECK) return "Cannot move to stock";
 
     sp = piles[spi];
@@ -491,12 +516,111 @@ static int auto_foundation(void)
     return moved;
 }
 
-/* Win = every foundation has 13 cards */
 static int game_won(void)
 {
     int i;
     for (i = 0; i < FDN_COUNT; i++)
         if (piles[P_FDN1 + i]->num_cards != 13) return 0;
+    return 1;
+}
+
+/* ---------------- undo ---------------- */
+static void capture_state(undo_state *u)
+{
+    int i;
+    int out = 0;
+    for (i = 0; i < PILE_COUNT; i++) {
+        card_node *n = piles[i]->head;
+        int pos = 0;
+        while (n && out < (int)(sizeof(u->cards) / sizeof(u->cards[0]))) {
+            u->cards[out].suit     = n->value->suit;
+            u->cards[out].rank     = n->value->rank;
+            u->cards[out].revealed = n->value->revealed;
+            u->cards[out].pile     = (unsigned char)i;
+            u->cards[out].pos      = (unsigned char)pos;
+            out++;
+            pos++;
+            n = n->next;
+        }
+    }
+    u->score = score;
+    u->sel_row = 0;
+    u->sel_col = 0;
+    u->sel_depth = -1;
+    u->selected = -1;
+    u->selected_index = -1;
+}
+
+static const char pile_types[] = "dwffffccccccc";
+
+static void restore_state(const undo_state *u,
+                          int *sel_row, int *sel_col, int *sel_depth,
+                          int *selected, int *selected_index)
+{
+    int i, k;
+
+    for (i = 0; i < PILE_COUNT; i++) {
+        if (!piles[i])
+            piles[i] = make_pile(pile_types[i]);
+        {
+            card_node *n = piles[i]->head;
+            while (n) {
+                card_node *nx = n->next;
+                free(n->value);
+                free(n);
+                n = nx;
+            }
+        }
+        piles[i]->head = NULL;
+        piles[i]->num_cards = 0;
+    }
+
+    for (k = 0; k < (int)(sizeof(u->cards) / sizeof(u->cards[0])); k++) {
+        int p = u->cards[k].pile;
+        if (p >= 0 && p < PILE_COUNT && u->cards[k].suit < SUIT_COUNT) {
+            card *c = (card *)allocz(sizeof(card));
+            if (!c) return;
+            c->suit     = u->cards[k].suit;
+            c->rank     = u->cards[k].rank;
+            c->revealed = u->cards[k].revealed;
+            push(piles[p], c);
+        }
+    }
+
+    score = u->score;
+    *sel_row = u->sel_row;
+    *sel_col = u->sel_col;
+    *sel_depth = u->sel_depth;
+    *selected = u->selected;
+    *selected_index = u->selected_index;
+}
+
+static void undo_push(int sel_row, int sel_col, int sel_depth,
+                      int selected, int selected_index)
+{
+    undo_state *u;
+    if (undo_top >= UNDO_DEPTH) {
+        memmove(&undo_stack[0], &undo_stack[1],
+                sizeof(undo_state) * (UNDO_DEPTH - 1));
+        undo_top = UNDO_DEPTH - 1;
+    }
+    u = &undo_stack[undo_top];
+    capture_state(u);
+    u->sel_row = sel_row;
+    u->sel_col = sel_col;
+    u->sel_depth = sel_depth;
+    u->selected = selected;
+    u->selected_index = selected_index;
+    undo_top++;
+}
+
+static int undo_pop(int *sel_row, int *sel_col, int *sel_depth,
+                    int *selected, int *selected_index)
+{
+    if (undo_top <= 0) return 0;
+    undo_top--;
+    restore_state(&undo_stack[undo_top],
+                  sel_row, sel_col, sel_depth, selected, selected_index);
     return 1;
 }
 
@@ -506,16 +630,6 @@ static void put_at(int x, int y, const char *text, int fg, int bg)
     tui_gotoxy(POP_X + 1 + x, GOY + y);
     tui_color(fg, bg);
     tui_puts(text);
-}
-
-static void clear_region(int x, int y, int w, int h, int bg)
-{
-    int i, j;
-    tui_color(TUI_BLACK, bg);
-    for (j = 0; j < h; j++) {
-        tui_gotoxy(POP_X + 1 + x, GOY + y + j);
-        for (i = 0; i < w; i++) tui_putc(' ');
-    }
 }
 
 static void draw_felt(int x, int y, int w, int h)
@@ -529,6 +643,7 @@ static void draw_felt(int x, int y, int w, int h)
             tui_putc(f->on ? f->ch : ' ');
     }
 }
+
 static void draw_frame(void)
 {
     int i;
@@ -569,7 +684,7 @@ static void draw_frame(void)
     tui_putc(0xB3);
     for (i = 0; i < POP_W - 2; i++) tui_putc(' ');
     tui_gotoxy(POP_X + 2, GOY + POP_H - 3);
-    tui_puts("Arrows  Space  A:auto  N:new  Esc");
+    tui_puts("Arws Spc A:auto U:undo N:new Esc");
     tui_gotoxy(POP_X + POP_W - 1, GOY + POP_H - 3);
     tui_putc(0xB3);
 
@@ -582,10 +697,30 @@ static void draw_frame(void)
 static void draw_status(void)
 {
     char buf[32];
-    snprintf(buf, sizeof buf, "  S:%d", score);
+
+    /* score: right-aligned, blanked to fixed width so it can't leave residue */
+    tui_gotoxy(POP_X + POP_W - 10, POP_Y + 1);
+    tui_color(TUI_WHITE, TUI_BLACK);
+    {
+        int k;
+        for (k = 0; k < 8; k++) tui_putc(' ');
+    }
+    snprintf(buf, sizeof buf, "S:%d", score);
     tui_gotoxy(POP_X + POP_W - 2 - (int)strlen(buf), POP_Y + 1);
     tui_color(TUI_WHITE, TUI_BLACK);
     tui_puts(buf);
+
+    /* seed: mid-title, dim */
+    snprintf(buf, sizeof buf, "#%lu", current_seed);
+    tui_gotoxy(POP_X + 13, POP_Y + 1);
+    tui_color(TUI_DGRAY, TUI_BLACK);
+    tui_puts(buf);
+    {
+        int k;
+        int len = (int)strlen(buf);
+        for (k = len; k < 13; k++) tui_putc(' ');   /* blank tail */
+    }
+    tui_color(TUI_WHITE, TUI_BLACK);
 }
 
 static void draw_card_at(int x, int y, card *c)
@@ -661,7 +796,6 @@ static void draw_cursor(int sel_row, int sel_col, int sel_depth,
     int cx = -1, cy = -1;
     int sx = -1, sy = -1;
 
-    /* current position */
     if (sel_row == 0) {
         cx = slot_x(sel_col) + 2;
         cy = 0;
@@ -673,7 +807,6 @@ static void draw_cursor(int sel_row, int sel_col, int sel_depth,
         cy = 2;
     }
 
-    /* selected source */
     if (selected_slot >= 0) {
         if (selected_slot >= SLOT_COL1) {
             int cidx = selected_slot - SLOT_COL1;
@@ -687,7 +820,6 @@ static void draw_cursor(int sel_row, int sel_col, int sel_depth,
     }
 
     if (sx == cx && sy == cy) {
-        /* cursor is on the selected card: draw a combined '+' */
         paint_marker(-1, -1, 0, &last_cur_x, &last_cur_y);
         paint_marker(-1, -1, 0, &last_sel_x, &last_sel_y);
         put_at(cx, cy, "+", TUI_LMAGENTA, felt_variants[felt_idx].bg);
@@ -717,35 +849,75 @@ static void draw_message(const char *msg)
 }
 
 /* ---------------- setup / cleanup ---------------- */
-static void prepare_game(void)
+static unsigned long make_seed(void)
+{
+    unsigned long s = tui_millis();
+    if (s == 0) s = 1;
+    return s;
+}
+
+static void prepare_game(unsigned long seed)
 {
     int i;
-    static const char types[] = "dwffffccccccc";
+    current_seed = seed;
+    srand((unsigned)seed);
+
     for (i = 0; i < PILE_COUNT; i++)
-        piles[i] = make_pile(types[i]);
+        piles[i] = make_pile(pile_types[i]);
     fill_deck(piles[P_DECK]);
     shuffle_pile(piles[P_DECK]);
+
+    /* snapshot the shuffled deck order for R (replay) */
+    {
+        card_node *n = piles[P_DECK]->head;
+        i = 0;
+        while (n && i < (int)(sizeof(deal_order) / sizeof(deal_order[0]))) {
+            deal_order[i++] = *n->value;
+            n = n->next;
+        }
+    }
     deal();
     score = 0;
+    undo_top = 0;
+}
+
+static void replay_game(void)
+{
+    int i;
+    for (i = 0; i < PILE_COUNT; i++)
+        piles[i] = make_pile(pile_types[i]);
+
+    for (i = 0; i < (int)(sizeof(deal_order) / sizeof(deal_order[0])); i++) {
+        card *c = (card *)allocz(sizeof(card));
+        if (!c) break;
+        *c = deal_order[i];
+        c->revealed = 0;
+        push(piles[P_DECK], c);
+    }
+    deal();
+    score = 0;
+    undo_top = 0;
 }
 
 static void free_game(void)
 {
     int i;
     for (i = 0; i < PILE_COUNT; i++) {
-        card_node *n = piles[i]->head;
-        while (n) {
-            card_node *nx = n->next;
-            free(n->value);
-            free(n);
-            n = nx;
+        if (!piles[i]) continue;
+        {
+            card_node *n = piles[i]->head;
+            while (n) {
+                card_node *nx = n->next;
+                free(n->value);
+                free(n);
+                n = nx;
+            }
         }
         free(piles[i]);
         piles[i] = NULL;
     }
 }
 
-/* Clear the popup region (used both at start and on new game) */
 static void clear_popup_region(void)
 {
     int i;
@@ -759,25 +931,74 @@ static void clear_popup_region(void)
     }
 }
 
-/* Reset cursor marker tracking (positions from the old game are gone) */
 static void reset_marker_tracking(void)
 {
     last_cur_x = last_cur_y = -1;
     last_sel_x = last_sel_y = -1;
 }
 
-/* Prompt for y/n in the bottom banner. Returns 1 for yes, 0 for no. */
-static int prompt_yes_no(const char *question)
+/* ---------------- prompts ---------------- */
+enum { PROMPT_NO = 0, PROMPT_YES = 1, PROMPT_REPLAY = 2 };
+
+static int prompt_new_game(void)
 {
     int c;
-    draw_message(question);
+    draw_message("New game? Y=yes R=replay N=no");
     for (;;) {
         c = tui_getch();
-        if (c == 'y' || c == 'Y') return 1;
-        if (c == 'n' || c == 'N') return 0;
-        if (c == 27) return 0;      /* Esc = no */
+        if (c == 'y' || c == 'Y') return PROMPT_YES;
+        if (c == 'r' || c == 'R') return PROMPT_REPLAY;
+        if (c == 'n' || c == 'N') return PROMPT_NO;
+        if (c == 27) return PROMPT_NO;
         if (c == 0 || c == 224) { tui_getch(); continue; }
     }
+}
+
+/* Prompt for a seed. Returns 0 for "use random". */
+static unsigned long prompt_seed(void)
+{
+    char buf[16];
+    int len = 0;
+    unsigned long v = 0;
+    int i;
+
+    tui_gotoxy(POP_X + 2, GOY + POP_H - 3);
+    tui_color(TUI_WHITE, TUI_BLACK);
+    {
+        int k;
+        for (k = 0; k < POP_W - 4; k++) tui_putc(' ');
+    }
+    tui_gotoxy(POP_X + 2, GOY + POP_H - 3);
+    tui_puts("Seed (Enter=random): ");
+
+    tui_cursor(1, 0);
+    for (;;) {
+        int c = tui_getch();
+        if (c == 13 || c == 10) break;
+        if (c == 27) { tui_cursor(0, 0); return 0; }
+        if (c == 8) {
+            if (len > 0) {
+                len--;
+                tui_putc('\b'); tui_putc(' '); tui_putc('\b');
+            }
+            continue;
+        }
+        if (c >= '0' && c <= '9' && len < (int)sizeof(buf) - 1) {
+            buf[len++] = (char)c;
+            tui_putc(c);
+        }
+    }
+    tui_cursor(0, 0);
+
+    buf[len] = '\0';
+    if (len == 0) return 0;
+    for (i = 0; i < len; i++) {
+        if (v > (0xFFFFFFFFUL - (unsigned long)(buf[i] - '0')) / 10)
+            break;
+        v = v * 10 + (unsigned long)(buf[i] - '0');
+    }
+    if (v == 0) v = 1;
+    return v;
 }
 
 /* ---------------- entry ---------------- */
@@ -792,37 +1013,44 @@ static int run_solitaire(void)
     int won = 0;
 
     tui_cursor(0, 0);
-    srand((unsigned)tui_millis());
 
     clear_popup_region();
     reset_marker_tracking();
-    prepare_game();
+    prepare_game(make_seed());
     draw_frame();
     draw_status();
     draw();
-    draw_message("Arrows move, Space selects");
+    draw_message("Arws Spc A:auto U:undo N:new Esc");
     draw_cursor(sel_row, sel_col, sel_depth, selected, selected_index);
 
     while (!quit) {
         int c;
 
-        /* if won, only N (new game) or Q/Esc work */
         if (won) {
             c = tui_getch();
             if (c == 'n' || c == 'N') {
-                if (prompt_yes_no("New game? y/n")) {
+                int answer = prompt_new_game();
+                if (answer != PROMPT_NO) {
+                    unsigned long seed = 0;
+                    if (answer == PROMPT_YES)
+                        seed = prompt_seed();
                     free_game();
                     clear_popup_region();
                     reset_marker_tracking();
-                    prepare_game();
-                    score = 0;
+                    if (answer == PROMPT_YES) {
+                        if (seed == 0) seed = make_seed();
+                        prepare_game(seed);
+                    } else {
+                        replay_game();
+                    }
                     sel_row = 0; sel_col = 0; sel_depth = -1;
                     selected = -1; selected_index = -1;
                     won = 0;
                     draw_frame();
                     draw_status();
                     draw();
-                    draw_message("New game.");
+                    draw_message(answer == PROMPT_YES
+                                 ? "New game." : "Replay.");
                     draw_cursor(sel_row, sel_col, sel_depth,
                                 selected, selected_index);
                 } else {
@@ -840,12 +1068,12 @@ static int run_solitaire(void)
             int scan = tui_getch();
             if (scan == 72) {                       /* up */
                 if (sel_row == 1 && sel_depth > 0) {
-                    sel_depth--;                    /* walk up the stack */
+                    sel_depth--;
                 } else if (sel_row == 1 && sel_depth == 0) {
-                    sel_depth = -1;                 /* exit stack to row */
+                    sel_depth = -1;
                 } else if (sel_row == 1 && sel_depth < 0) {
                     static const int to_top[7] = {0, 1, 2, 2, 3, 4, 5};
-                    sel_row = 0;                    /* row to top row */
+                    sel_row = 0;
                     sel_col = to_top[sel_col];
                     sel_depth = -1;
                 }
@@ -901,6 +1129,7 @@ static int run_solitaire(void)
         }
 
         if (c == 27 || c == 'q' || c == 'Q') { quit = 1; break; }
+
         /* Enter = cycle felt */
         if (c == 13 || c == 10) {
             felt_idx = (felt_idx + 1) % FELT_COUNT;
@@ -916,39 +1145,73 @@ static int run_solitaire(void)
                         selected, selected_index);
             continue;
         }
-        /* N = new game, always (with y/n confirm) */
+
+        /* U = undo */
+        if (c == 'u' || c == 'U') {
+            if (undo_pop(&sel_row, &sel_col, &sel_depth,
+                         &selected, &selected_index)) {
+                won = 0;
+                clear_popup_region();
+                reset_marker_tracking();
+                draw_frame();
+                draw_status();
+                draw();
+                draw_message("Undone.");
+                draw_cursor(sel_row, sel_col, sel_depth,
+                            selected, selected_index);
+            } else {
+                draw_message("Nothing to undo.");
+            }
+            continue;
+        }
+
+        /* N = new game (Y / R / N, then optional seed) */
         if (c == 'n' || c == 'N') {
-            if (prompt_yes_no("New game? y/n")) {
+            int answer = prompt_new_game();
+            if (answer != PROMPT_NO) {
+                unsigned long seed = 0;
+                if (answer == PROMPT_YES)
+                    seed = prompt_seed();
                 free_game();
                 clear_popup_region();
                 reset_marker_tracking();
-                prepare_game();
-                score = 0;
+                if (answer == PROMPT_YES) {
+                    if (seed == 0) seed = make_seed();
+                    prepare_game(seed);
+                } else {
+                    replay_game();
+                }
                 sel_row = 0; sel_col = 0; sel_depth = -1;
                 selected = -1; selected_index = -1;
                 won = 0;
                 draw_frame();
                 draw_status();
                 draw();
-                draw_message("New game.");
+                draw_message(answer == PROMPT_YES
+                             ? "New game." : "Replay.");
                 draw_cursor(sel_row, sel_col, sel_depth, selected,
                             selected_index);
             } else {
-                draw_message("Arrows move, Space selects");
+                draw_message("Arws Spc A:auto U:undo N:new Esc");
             }
             continue;
         }
 
+        /* A = auto-foundation */
         if (c == 'a' || c == 'A') {
             char buf[32];
-            int n = auto_foundation();
-            if (n > 0) {
-                snprintf(buf, sizeof buf, "Auto: %d card%s to foundation",
-                         n, n == 1 ? "" : "s");
-            } else {
-                snprintf(buf, sizeof buf, "No foundation moves");
+            undo_push(sel_row, sel_col, sel_depth, selected, selected_index);
+            {
+                int n = auto_foundation();
+                if (n == 0)
+                    undo_top--;
+                else {
+                    snprintf(buf, sizeof buf,
+                             "Auto: %d card%s to foundation",
+                             n, n == 1 ? "" : "s");
+                    draw_message(buf);
+                }
             }
-            draw_message(buf);
             draw_status();
             draw();
             draw_cursor(sel_row, sel_col, sel_depth, selected,
@@ -960,11 +1223,14 @@ static int run_solitaire(void)
             continue;
         }
 
+        /* Space = select / move / cancel */
         if (c == ' ') {
             int slot = (sel_row == 0) ? sel_col : (SLOT_COL1 + sel_col);
 
             if (selected < 0) {
                 if (slot == SLOT_STOCK) {
+                    undo_push(sel_row, sel_col, sel_depth,
+                              selected, selected_index);
                     draw_message(try_move(SLOT_STOCK, SLOT_STOCK, -1));
                     draw_status();
                     draw();
@@ -982,7 +1248,10 @@ static int run_solitaire(void)
                 selected_index = -1;
                 draw_message("Cancelled.");
             } else {
-                const char *r = try_move(selected, slot, selected_index);
+                const char *r;
+                undo_push(sel_row, sel_col, sel_depth,
+                          selected, selected_index);
+                r = try_move(selected, slot, selected_index);
                 draw_message(r);
                 if (r[0] == 'O' || r[0] == 'R' || r[0] == 'D') {
                     if (slot >= SLOT_COL1) {
@@ -1001,6 +1270,8 @@ static int run_solitaire(void)
                     }
                     selected = -1;
                     selected_index = -1;
+                } else {
+                    undo_top--;     /* failed move: discard snapshot */
                 }
                 draw_status();
                 draw();
